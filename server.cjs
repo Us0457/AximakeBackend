@@ -10,6 +10,26 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Basic health endpoint for Render/Internal checks
+app.get('/api/health', (req, res) => {
+  console.log('/api/health requested from', req.ip || req.headers['x-forwarded-for'] || 'unknown');
+  res.status(200).json({ status: 'ok' });
+});
+
+// root quick health for some platforms
+app.get('/', (req, res) => {
+  console.log('/ root requested from', req.ip || req.headers['x-forwarded-for'] || 'unknown');
+  res.status(200).send('ok');
+});
+
+// Global error handlers to log crashes and avoid silent exits
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandledRejection', reason);
+});
+
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 // Helper to transform your order payload to Shiprocket API format
