@@ -1,0 +1,3 @@
+name,category,price,stock,visible,featured,description,material,weight,dimensions,images
+Sample Product,Category A,499,10,true,false,This is a sample product.,PLA,200g,10x10x10cm,"{products/sample1.jpg}"
+Another Product,Category B,999,5,true,true,Another sample.,ABS,150g,8x8x8cm,"{products/sample2.jpg,products/sample3.jpg}"

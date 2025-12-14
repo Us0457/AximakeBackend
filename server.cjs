@@ -1,0 +1,884 @@
+require('dotenv').config();
+const express = require('express');
+const nodemailer = require('nodemailer');
+const cors = require('cors');
+const { createShipment, downloadInvoice, printAndDownloadInvoice } = require('./src/lib/shiprocketService.js');
+const { createClient } = require('@supabase/supabase-js');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+// Helper to transform your order payload to Shiprocket API format
+function transformOrderToShiprocket(order) {
+  const address = order.address || {};
+  // Compose full address string
+  const fullAddress = [address.flat_no, address.area, address.city, address.state, address.pincode]
+    .filter(Boolean).join(', ');
+  // Use fallback for name if empty string or missing
+  const customerName = (address.name && address.name.trim()) ? address.name : 'Customer';
+  const customerLastName = address.last_name || '';
+  // Calculate sub_total
+  // Use raw prices for calculation, only round at the end
+  const items = (order.items || []).map(item => {
+    const isQuote = !item.product_id;
+    const name = isQuote ? (item.display_name || item.cart_name || item.file_name || item.name || 'Custom Print') : (item.name || 'Product');
+    const sku = item.sku || item.product_id || item.file_name || (isQuote ? ('QUOTE-' + String(item.id)) : String(item.id)) || 'QUOTE';
+    // Use raw price for calculation
+    const selling_price = Number(item.price) || 0;
+    return {
+      name,
+      sku,
+      units: Number(item.quantity) || 1,
+      selling_price,
+      discount: item.discount !== undefined ? item.discount : '',
+      tax: item.tax !== undefined ? item.tax : '',
+      hsn: item.hsn ? Number(item.hsn) : 3916 // fallback HSN for all
+    };
+  });
+  // Debug: log all items before filtering
+  console.log('Shiprocket order_items before filter:', JSON.stringify(items, null, 2));
+  // Only filter out items with missing name, sku, or price <= 0
+  const filteredItems = items.filter(item => item.name && item.sku && item.selling_price > 0);
+  if (filteredItems.length !== items.length) {
+    console.warn('Some items were filtered out from Shiprocket payload:', items.filter(item => !(item.name && item.sku && item.selling_price > 0)));
+  }
+  // Calculate sub_total as original total before discount (round only at the end)
+  const sub_total = Math.round(items.reduce((sum, item) => sum + (item.selling_price * item.units), 0));
+  // Calculate total_discount as the discount amount (rounded integer)
+  const total_discount = Math.round(Number(order.discount_amount || order.total_discount || 0));
+  // Charges (use raw, round at the end)
+  const shipping_charges = Math.round(Number(order.shipping_charges) || 0);
+  const giftwrap_charges = Math.round(Number(order.giftwrap_charges) || 0);
+  const transaction_charges = Math.round(Number(order.transaction_charges) || 0);
+  // Calculate final total after discount and charges (round at the end)
+  const total = Math.round(Math.max(sub_total - total_discount + shipping_charges + giftwrap_charges + transaction_charges, 0));
+  // Format order_date as 'YYYY-MM-DD HH:mm'
+  const dateObj = order.created_at ? new Date(order.created_at) : new Date();
+  const pad = n => n < 10 ? '0' + n : n;
+  const order_date = `${dateObj.getFullYear()}-${pad(dateObj.getMonth()+1)}-${pad(dateObj.getDate())} ${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}`;
+
+  // Always use 'Primary' for pickup_location
+  // Always use 'Bangalore' for city
+  // Always use numbers for pincode and phone
+  const city = 'Bangalore';
+  const pincode = address.pincode ? Number(address.pincode) : '';
+  // Normalize phone to a plain 10-digit string (Shiprocket prefers local subscriber numbers)
+  let phone = '';
+  if (address.phone) {
+    const digits = String(address.phone).replace(/\D/g, '');
+    if (digits.length >= 10) {
+      phone = digits.slice(-10); // use last 10 digits as local number
+    } else {
+      phone = digits;
+    }
+  }
+
+  // Use the pickup location from .env (must match Shiprocket dashboard exactly)
+  const pickupLocation = process.env.SHIPROCKET_PICKUP_LOCATION || 'Primary';
+
+  const payload = {
+    order_id: order.order_code || '',
+    order_date,
+    pickup_location: pickupLocation,
+    comment: order.comment || '',
+    billing_customer_name: customerName,
+    billing_last_name: customerLastName,
+    billing_address: address.flat_no + (address.area ? ', ' + address.area : ''),
+    billing_address_2: address.address_2 || '',
+    billing_city: city,
+    billing_pincode: pincode,
+    billing_state: address.state || '',
+    billing_country: 'India',
+    billing_email: address.email || 'noemail@example.com',
+    billing_phone: phone,
+    shipping_is_billing: true,
+    shipping_customer_name: '',
+    shipping_last_name: '',
+    shipping_address: '',
+    shipping_address_2: '',
+    shipping_city: '',
+    shipping_pincode: '',
+    shipping_country: '',
+    shipping_state: '',
+    shipping_email: '',
+    shipping_phone: '',
+    order_items: filteredItems,
+    payment_method: (order.payment_method && order.payment_method.toUpperCase() === 'COD') ? 'COD' : 'Prepaid',
+    sub_total,
+    total_discount,
+    shipping_charges,
+    giftwrap_charges,
+    transaction_charges,
+    total,
+    length: Number(order.length) || 10,
+    breadth: Number(order.breadth) || 10,
+    height: Number(order.height) || 10,
+    weight: Number(order.weight) || 0.5
+  };
+  return payload;
+}
+
+app.post('/api/create-shiprocket-order', async (req, res) => {
+  try {
+    const order = req.body;
+    // Basic validation: billing email must look valid to avoid Shiprocket API errors
+    const billingEmail = order?.address?.email || '';
+    const looksLikeEmail = typeof billingEmail === 'string' && /@.+\./.test(billingEmail);
+    if (!looksLikeEmail) {
+      return res.status(400).json({ error: 'Invalid billing email: ' + billingEmail + '. Please provide a valid email (e.g. user@example.com).' });
+    }
+    console.log('Shiprocket order payload (raw input):', JSON.stringify(order, null, 2));
+    // Debug: log all items and warn if any quote item is missing file_name
+    if (Array.isArray(order.items)) {
+      order.items.forEach((item, idx) => {
+        if (!item.product_id && !item.file_name) {
+          console.warn(`Quote item at index ${idx} is missing file_name!`, item);
+        } else if (!item.product_id) {
+          console.log(`Quote item at index ${idx} has file_name:`, item.file_name);
+        }
+      });
+    }
+
+    // --- Reject if not a raw order object ---
+    if (!order.address || !order.items) {
+      return res.status(400).json({
+        error: 'Request must be a raw order object with address and items. Do not send a Shiprocket-style payload.',
+        receivedKeys: Object.keys(order)
+      });
+    }
+
+    // Transform order to Shiprocket format
+    const shiprocketOrder = transformOrderToShiprocket(order);
+    console.log('Shiprocket API payload (transformed):', JSON.stringify(shiprocketOrder, null, 2));
+
+    // --- Strict validation for Shiprocket payload ---
+    const requiredFields = [
+      'order_id', 'order_date', 'pickup_location',
+      'billing_customer_name', 'billing_address', 'billing_city', 'billing_pincode', 'billing_state', 'billing_country', 'billing_email', 'billing_phone',
+      'shipping_customer_name', 'shipping_address', 'shipping_city', 'shipping_pincode', 'shipping_state', 'shipping_country', 'shipping_email', 'shipping_phone',
+      'order_items', 'payment_method', 'sub_total', 'length', 'breadth', 'height', 'weight'
+    ];
+    const missingFields = requiredFields.filter(f => !(f in shiprocketOrder));
+    // Check order_date format
+    const dateFormatOk = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(shiprocketOrder.order_date);
+    if (missingFields.length > 0 || !dateFormatOk) {
+      return res.status(400).json({
+        error: 'Shiprocket payload missing required fields or has invalid date format',
+        missingFields,
+        order_date: shiprocketOrder.order_date,
+        shiprocketPayload: shiprocketOrder
+      });
+    }
+    // --- End strict validation ---
+
+    let shipment;
+    let errorMsg = null;
+    try {
+      shipment = await createShipment(shiprocketOrder);
+    } catch (err) {
+      // Log the error and payload for debugging
+      errorMsg = err.message;
+      console.error('Shiprocket API error:', errorMsg);
+    }
+    // Always return the transformed payload for debugging
+    if (errorMsg) {
+      res.status(500).set('Content-Type', 'application/json').send(JSON.stringify({ error: errorMsg, shiprocketPayload: shiprocketOrder }));
+      return;
+    }
+    const { data, error } = await supabase
+      .from('orders')
+      .update({
+        shiprocket_shipment_id: shipment.shipment_id,
+        shiprocket_awb: shipment.awb,
+        shiprocket_courier: shipment.courier,
+        shiprocket_status: shipment.status,
+        shiprocket_label_url: shipment.label_url,
+        shiprocket_order_id: shipment.order_id // <-- Save numeric Shiprocket order ID
+      })
+      .eq('order_code', order.order_code)
+      .select();
+    if (error) {
+      res.status(500).set('Content-Type', 'application/json').send(JSON.stringify({ error: 'Failed to update order with Shiprocket details', details: error, shiprocketPayload: shiprocketOrder }));
+      return;
+    }
+    res.status(200).set('Content-Type', 'application/json').send(JSON.stringify({ shipment, order: data[0], shiprocketPayload: shiprocketOrder }));
+    return;
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Configure your Gmail SMTP transporter (credentials read from environment)
+const smtpUser = process.env.SMTP_USER;
+const smtpPass = process.env.SMTP_PASS;
+if (!smtpUser || !smtpPass) {
+  console.warn('SMTP_USER or SMTP_PASS not set in environment. Email sending will fail.');
+}
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: smtpUser,
+    pass: smtpPass
+  }
+});
+
+app.post('/api/contact', async (req, res) => {
+  const { name, email, subject, message } = req.body;
+  try {
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM || smtpUser || 'no-reply@example.com',
+      to: process.env.SUPPORT_EMAIL || 'us5679077@gmail.com', // support/recipient email from env
+      subject: `Contact Form: ${subject}`,
+      text: `Name: ${name}\nEmail: ${email}\n\n${message}`
+    });
+    res.status(200).json({ success: true, message: 'Email sent!' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to send email', error: error.message });
+  }
+});
+
+// Shiprocket tracking endpoint
+app.get('/api/shiprocket-tracking/:shipment_id', async (req, res) => {
+  try {
+    const { getTracking } = require('./src/lib/shiprocketService.js');
+    // Fetch order from DB to get order_code and awb
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('order_code, shiprocket_awb, shiprocket_shipment_id')
+      .eq('shiprocket_shipment_id', req.params.shipment_id)
+      .limit(1);
+    if (error || !orders || orders.length === 0) {
+      return res.status(404).json({ error: 'Order not found for this shipment_id' });
+    }
+    const order = orders[0];
+    // Debug log: print the order object
+    console.log('Order fetched for tracking:', order);
+    // Try all possible identifiers for tracking
+    let tracking = null;
+    let trackingError = null;
+    // Try order_code first
+    try {
+      if (order.order_code) {
+        console.log('Trying getTracking with order_id:', order.order_code);
+        tracking = await getTracking({ order_id: order.order_code });
+        console.log('Shiprocket response for order_id:', JSON.stringify(tracking, null, 2));
+        // If valid tracking data is returned, use it and skip other attempts
+        if (tracking && tracking.tracking_data && Array.isArray(tracking.tracking_data.shipment_track) && tracking.tracking_data.shipment_track.length > 0) {
+          // Found valid tracking data, skip other attempts
+          trackingError = null;
+        } else if (tracking && tracking.tracking_data && tracking.tracking_data.error) {
+          // If Shiprocket returns an error, treat as no data
+          tracking = null;
+        }
+      }
+    } catch (e) { trackingError = e; }
+    // If not found, try AWB
+    if (!tracking && order.shiprocket_awb) {
+      try {
+        console.log('Trying getTracking with awb:', order.shiprocket_awb);
+        tracking = await getTracking({ awb: order.shiprocket_awb });
+        console.log('Shiprocket response for awb:', JSON.stringify(tracking, null, 2));
+        if (tracking && tracking.tracking_data && Array.isArray(tracking.tracking_data.shipment_track) && tracking.tracking_data.shipment_track.length > 0) {
+          trackingError = null;
+        } else if (tracking && tracking.tracking_data && tracking.tracking_data.error) {
+          tracking = null;
+        }
+      } catch (e) { trackingError = e; }
+    }
+    // If still not found, try shipment_id (legacy fallback)
+    if (!tracking && order.shiprocket_shipment_id) {
+      try {
+        console.log('Trying getTracking with shipment_id:', order.shiprocket_shipment_id);
+        tracking = await getTracking({ shipment_id: order.shiprocket_shipment_id });
+        console.log('Shiprocket response for shipment_id:', JSON.stringify(tracking, null, 2));
+      } catch (e) { trackingError = e; }
+    }
+    if (!tracking || !tracking.tracking_data) {
+      return res.status(404).json({ error: 'No tracking data found', details: trackingError?.message });
+    }
+    // Extract latest AWB, courier, and status from tracking response
+    const trackingDataSR = tracking?.tracking_data;
+    console.log('Shiprocket tracking_data:', JSON.stringify(trackingDataSR, null, 2));
+    let latestAWB_SR = null;
+    let latestCourier_SR = null;
+    let latestStatus_SR = null;
+    let latestStatusCode_SR = null;
+    let track_url_SR = trackingDataSR?.track_url || null;
+    // Try to extract from shipment_track array if present
+    if (Array.isArray(trackingDataSR?.shipment_track) && trackingDataSR.shipment_track.length > 0) {
+      const trackObj = trackingDataSR.shipment_track.find(t => t.current_status || t.status || t.awb_code || t.courier_name);
+      if (trackObj) {
+        latestAWB_SR = trackObj.awb_code || null;
+        latestCourier_SR = trackObj.courier_name || null;
+        latestStatus_SR = trackObj.current_status || trackObj.status || null;
+        latestStatusCode_SR = trackObj.status_code || null;
+      }
+    }
+    // Fallbacks if not found in shipment_track
+    if (!latestAWB_SR) latestAWB_SR = trackingDataSR?.awb_code || null;
+    if (!latestCourier_SR) latestCourier_SR = trackingDataSR?.courier_name || null;
+    if (!latestStatus_SR) latestStatus_SR = trackingDataSR?.shipment_status || trackingDataSR?.current_status || trackingDataSR?.status || null;
+    if (!latestStatus_SR) latestStatus_SR = 'Pending'; // fallback if all are null
+    if (!latestStatusCode_SR) latestStatusCode_SR = trackingDataSR?.status_code || null;
+    // Map status code to description if possible
+    let statusDescription = latestStatus_SR;
+    if (latestStatusCode_SR && SHIPROCKET_STATUS_MAP[latestStatusCode_SR]) {
+      statusDescription = SHIPROCKET_STATUS_MAP[latestStatusCode_SR];
+    }
+    // Always update order in DB with latest info
+    await supabase.from('orders').update({
+      shiprocket_awb: latestAWB_SR,
+      shiprocket_courier: latestCourier_SR,
+      shiprocket_status: statusDescription,
+      shiprocket_track_url: track_url_SR
+    }).eq('shiprocket_shipment_id', req.params.shipment_id);
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      awb_code: latestAWB_SR,
+      courier_company_name: latestCourier_SR,
+      shipment_status: latestStatus_SR,
+      track_url: track_url_SR,
+      tracking_data: trackingDataSR
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: Generate AWB and assign courier ("Ship Now")
+app.post('/api/shiprocket-ship-now/:shipment_id', async (req, res) => {
+  try {
+    const { generateAWB, getTracking } = require('./src/lib/shiprocketService.js');
+    const shipment_id = req.params.shipment_id;
+    // Optionally accept courier_id in body
+    const courier_id = req.body.courier_id || null;
+    const result = await generateAWB(shipment_id, courier_id);
+    // Fetch latest tracking info for status
+    let latestStatus = result.status;
+    let latestAWB = result.awb_code;
+    let latestCourier = result.courier_name;
+    let track_url = null;
+    try {
+      const tracking = await getTracking(shipment_id);
+      latestStatus = tracking?.tracking_data?.shipment_track?.[0]?.current_status || tracking?.tracking_data?.shipment_status || result.status;
+      latestAWB = tracking?.tracking_data?.shipment_track?.[0]?.awb_code || result.awb_code;
+      latestCourier = tracking?.tracking_data?.shipment_track?.[0]?.courier_name || result.courier_name;
+      track_url = tracking?.tracking_data?.track_url || null;
+    } catch (e) {}
+    // Update order in DB with new AWB/courier info and status
+    await supabase.from('orders').update({
+      shiprocket_awb: latestAWB,
+      shiprocket_courier: latestCourier,
+      shiprocket_status: latestStatus,
+      shiprocket_track_url: track_url
+    }).eq('shiprocket_shipment_id', shipment_id);
+    res.json({ ...result, latestStatus, latestAWB, latestCourier, track_url });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// New endpoint: Automatically assign courier and generate AWB for a shipment
+app.post('/api/shiprocket-ship-now', async (req, res) => {
+  try {
+    const { generateAWB, getTracking } = require('./src/lib/shiprocketService.js');
+    const { shipment_id } = req.body;
+    if (!shipment_id) {
+      return res.status(400).json({ error: 'shipment_id is required in the request body' });
+    }
+    // Call Shiprocket API to assign courier and generate AWB
+    let result;
+    let tracking = null;
+    let trackingError = null;
+    try {
+      result = await generateAWB(shipment_id);
+    } catch (err) {
+      // If AWB is already assigned, fetch the current AWB and status
+      if (err.message && err.message.includes('AWB is already assigned')) {
+        // Fetch order from DB to get order_code and awb
+        const { data: orders, error } = await supabase
+          .from('orders')
+          .select('order_code, shiprocket_awb')
+          .eq('shiprocket_shipment_id', shipment_id)
+          .limit(1);
+        if (error || !orders || orders.length === 0) {
+          return res.status(500).json({ error: 'AWB already assigned but failed to fetch order from DB', details: error });
+        }
+        const order = orders[0];
+        // Prefer AWB, then order_code
+        try {
+          if (order.shiprocket_awb) {
+            tracking = await getTracking({ awb: order.shiprocket_awb });
+          } else if (order.order_code) {
+            tracking = await getTracking({ order_id: order.order_code });
+          } else {
+            throw new Error('No AWB or order_code available for tracking');
+          }
+        } catch (trackErr) {
+          return res.status(500).json({ error: 'AWB already assigned but failed to fetch tracking', details: trackErr.message });
+        }
+        // Always update order with latest info
+        const trackingData = tracking?.tracking_data;
+        let latestAWB = null;
+        let latestCourier = null;
+        let latestStatus = null;
+        let track_url = trackingData?.track_url || null;
+        if (Array.isArray(trackingData?.shipment_track) && trackingData.shipment_track.length > 0) {
+          const trackObj = trackingData.shipment_track.find(t => t.current_status || t.status || t.awb_code || t.courier_name);
+          if (trackObj) {
+            latestAWB = trackObj.awb_code || null;
+            latestCourier = trackObj.courier_name || null;
+            latestStatus = trackObj.current_status || trackObj.status || null;
+          }
+        }
+        if (!latestAWB) latestAWB = trackingData?.awb_code || null;
+        if (!latestCourier) latestCourier = trackingData?.courier_name || null;
+        if (!latestStatus) latestStatus = trackingData?.shipment_status || trackingData?.current_status || trackingData?.status || null;
+        if (!latestStatus) latestStatus = 'Pending'; // fallback if all are null
+        // Update order in DB
+        await supabase.from('orders').update({
+          shiprocket_awb: latestAWB,
+          shiprocket_courier: latestCourier,
+          shiprocket_status: latestStatus,
+          shiprocket_track_url: track_url
+        }).eq('shiprocket_shipment_id', shipment_id);
+        return res.json({ awb_code: latestAWB, courier_company_name: latestCourier, track_url, shipment_status: latestStatus, already_assigned: true });
+      }
+      // Otherwise, return the error as before
+      console.error('Shiprocket AWB generation error:', err);
+      return res.status(500).json({ error: 'Shiprocket AWB generation failed', details: err.message, stack: err.stack });
+    }
+    // If Shiprocket did not return an AWB, treat as error
+    if (!result || !result.awb_code) {
+      console.error('Shiprocket AWB generation failed, response:', result);
+      return res.status(500).json({ error: 'Shiprocket did not return an AWB', details: result });
+    }
+    // Always use the fresh AWB from Shiprocket for tracking
+    try {
+      tracking = await getTracking({ awb: result.awb_code });
+    } catch (e) {
+      tracking = null;
+      trackingError = e;
+    }
+    // Robust extraction
+    const trackingData = tracking?.tracking_data;
+    let latestAWB = result.awb_code;
+    let latestCourier = result.courier_name;
+    let track_url = trackingData?.track_url || null;
+    // Robust status extraction: always prefer 'Ready to Ship' if present, otherwise try all fields
+    let latestStatus = null;
+    if (Array.isArray(trackingData?.shipment_track) && trackingData.shipment_track.length > 0) {
+      for (const trackObj of trackingData.shipment_track) {
+        if (trackObj.current_status && trackObj.current_status.toLowerCase() === 'ready to ship') {
+          latestStatus = 'Ready to Ship';
+          break;
+        }
+        if (trackObj.status && trackObj.status.toLowerCase() === 'ready to ship') {
+          latestStatus = 'Ready to Ship';
+          break;
+        }
+      }
+      if (!latestStatus) {
+        const trackObj = trackingData.shipment_track[0];
+        latestStatus = trackObj.current_status || trackObj.status || null;
+      }
+    }
+    if (!latestStatus) latestStatus = trackingData?.shipment_status || trackingData?.current_status || trackingData?.status || null;
+    if (!latestStatus) latestStatus = 'Pending';
+    await supabase.from('orders').update({
+      shiprocket_awb: latestAWB,
+      shiprocket_courier: latestCourier,
+      shiprocket_status: latestStatus,
+      shiprocket_track_url: track_url
+    }).eq('shiprocket_shipment_id', shipment_id);
+    res.json({ awb_code: latestAWB, courier_company_name: latestCourier, track_url, shipment_status: latestStatus });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Shiprocket Webhook endpoint for real-time tracking updates
+app.post('/api/shiprocket-webhook', async (req, res) => {
+  try {
+    // Open access POST endpoint for Shiprocket webhooks (no auth guard)
+    // If SHIPROCKET_WEBHOOK_TOKEN is set, require the x-api-key header to match.
+    const incomingToken = req.headers['x-api-key'] || req.headers['x_api_key'] || req.headers['authorization'] || null;
+    if (process.env.SHIPROCKET_WEBHOOK_TOKEN) {
+      if (!incomingToken || String(incomingToken) !== String(process.env.SHIPROCKET_WEBHOOK_TOKEN)) {
+        console.warn('Webhook: invalid or missing x-api-key header');
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    }
+    // Shiprocket will POST here; method is enforced by this POST route.
+    // NOTE: If you later want to restrict access, restore header check against process.env.SHIPROCKET_WEBHOOK_TOKEN.
+    const payload = req.body;
+    // Extract relevant fields
+    const order_id = payload.order_id || payload.order_code || null;
+    const shipment_id = payload.shipment_id || null;
+    const current_status = payload.current_status || payload.status || null;
+    const awb = payload.awb || payload.awb_code || null;
+    const courier = payload.courier || payload.courier_name || payload.courier_company_name || null;
+    // Prefer `scans` when present (Shiprocket sends `scans` array); fall back to `event_details`.
+    // Normalize incoming events into an array of objects (never keep stringified JSON in DB).
+    function normalizeEvents(raw) {
+      if (!raw) return null;
+      try {
+        let parsed = raw;
+        if (typeof raw === 'string') {
+          parsed = JSON.parse(raw);
+        }
+        // If parsed is an object that wraps an array, try common keys
+        if (!Array.isArray(parsed)) {
+          if (parsed && typeof parsed === 'object') {
+            if (Array.isArray(parsed.scans)) parsed = parsed.scans;
+            else if (Array.isArray(parsed.event_details)) parsed = parsed.event_details;
+            else parsed = [parsed];
+          } else {
+            parsed = [parsed];
+          }
+        }
+        // Ensure each element is an object (parse string elements if needed) and flatten nested arrays
+        const out = [];
+        for (const e of parsed) {
+          if (e == null) continue;
+          if (typeof e === 'string') {
+            try {
+              const p = JSON.parse(e);
+              if (Array.isArray(p)) out.push(...p);
+              else out.push(p);
+            } catch (pe) {
+              out.push({ activity: e });
+            }
+          } else if (Array.isArray(e)) {
+            out.push(...e);
+          } else {
+            out.push(e);
+          }
+        }
+        return out;
+      } catch (err) {
+        console.warn('Webhook: normalizeEvents failed to parse events', err);
+        return null;
+      }
+    }
+    const incomingEvents = normalizeEvents(payload.scans || payload.event_details || null);
+    // Robust update: try multiple identifiers so Shiprocket payloads map to our orders
+    const updateData = {
+      shiprocket_status: current_status,
+      shiprocket_awb: awb,
+      shiprocket_courier: courier
+    };
+    if (incomingEvents && Array.isArray(incomingEvents)) {
+      updateData.shiprocket_events = incomingEvents;
+    }
+    let matched = false;
+
+    // Helper to merge existing shiprocket_events with incoming events (avoid duplicates)
+    async function mergeAndUpdate(whereClause) {
+      try {
+        // fetch existing events
+        const { data: existingRows, error: selErr } = await supabase.from('orders').select('id, shiprocket_events').match(whereClause).limit(1);
+        if (selErr) {
+          console.error('Webhook: failed to fetch existing events', selErr);
+          return null;
+        }
+        const existing = Array.isArray(existingRows) && existingRows.length > 0 ? existingRows[0].shiprocket_events : null;
+        let merged = null;
+        if (incomingEvents && Array.isArray(incomingEvents)) {
+          const incoming = incomingEvents;
+          // normalize existing into array of objects
+          const existingArr = normalizeEvents(existing) || [];
+          // Use a Set of JSON strings to dedupe reliably
+          const seen = new Set(existingArr.map(e => {
+            try { return JSON.stringify(e); } catch (err) { return String(e); }
+          }));
+          for (const it of incoming) {
+            const key = (() => { try { return JSON.stringify(it); } catch (err) { return String(it); } })();
+            if (!seen.has(key)) {
+              existingArr.push(it);
+              seen.add(key);
+            }
+          }
+          // sort by date if possible (fallback to insertion order)
+          existingArr.sort((a, b) => {
+            const da = a && a.date ? Date.parse(a.date) : 0;
+            const db = b && b.date ? Date.parse(b.date) : 0;
+            if (da && db) return da - db;
+            if (da) return -1;
+            if (db) return 1;
+            return 0;
+          });
+          merged = existingArr;
+        }
+        const payload = { ...updateData };
+        if (merged) payload.shiprocket_events = merged;
+        const { data, error } = await supabase.from('orders').update(payload).match(whereClause).select();
+        if (error) console.error('Webhook update failed', whereClause, error);
+        return Array.isArray(data) && data.length > 0 ? data : null;
+      } catch (e) {
+        console.error('mergeAndUpdate error', e);
+        return null;
+      }
+    }
+    try {
+      // 1) Try shiprocket_shipment_id
+      if (shipment_id) {
+        const result = await mergeAndUpdate({ shiprocket_shipment_id: String(shipment_id) });
+        if (result) matched = true;
+      }
+      // 2) Try shiprocket_order_id (numeric Shiprocket order id)
+      if (!matched && order_id) {
+        const result = await mergeAndUpdate({ shiprocket_order_id: order_id });
+        if (result) matched = true;
+      }
+      // 3) Try order_code (our internal order_code may be sent as order_id)
+      if (!matched && order_id) {
+        const result = await mergeAndUpdate({ order_code: order_id });
+        if (result) matched = true;
+      }
+      // 4) Try matching by AWB
+      if (!matched && awb) {
+        const awbStr = String(awb);
+        const result = await mergeAndUpdate({ shiprocket_awb: awbStr });
+        if (result) matched = true;
+      }
+    } catch (e) {
+      console.error('Error updating order from webhook:', e);
+    }
+    if (!matched) {
+      console.warn('Webhook received but no matching order found', { order_id, shipment_id, awb });
+      // Extra debug: attempt to fetch the candidate order rows to report why matching failed
+      try {
+        const candidates = await Promise.all([
+          shipment_id ? supabase.from('orders').select('order_code,shiprocket_shipment_id,shiprocket_order_id,shiprocket_awb').eq('shiprocket_shipment_id', String(shipment_id)).limit(5) : Promise.resolve({ data: [] }),
+          order_id ? supabase.from('orders').select('order_code,shiprocket_shipment_id,shiprocket_order_id,shiprocket_awb').eq('shiprocket_order_id', order_id).limit(5) : Promise.resolve({ data: [] }),
+          order_id ? supabase.from('orders').select('order_code,shiprocket_shipment_id,shiprocket_order_id,shiprocket_awb').eq('order_code', order_id).limit(5) : Promise.resolve({ data: [] }),
+          awb ? supabase.from('orders').select('order_code,shiprocket_shipment_id,shiprocket_order_id,shiprocket_awb').eq('shiprocket_awb', String(awb)).limit(5) : Promise.resolve({ data: [] })
+        ]);
+        console.log('Webhook debug candidates:', {
+          by_shipment_id: candidates[0]?.data || [],
+          by_shiprocket_order_id: candidates[1]?.data || [],
+          by_order_code: candidates[2]?.data || [],
+          by_awb: candidates[3]?.data || []
+        });
+      } catch (dbgErr) {
+        console.error('Webhook debug fetch failed:', dbgErr);
+      }
+      // Return 200 to acknowledge webhook and avoid retries from Shiprocket
+      return res.status(200).json({ success: true, matched: false });
+    }
+    return res.status(200).json({ success: true, matched: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Shiprocket status sync endpoint (for status refresh and AWB sync)
+app.post('/api/shiprocket-status', async (req, res) => {
+  try {
+    const { getShipmentStatus } = require('./src/lib/shiprocketService.js');
+    const { shipment_id, order_code } = req.body;
+    if (!shipment_id || !order_code) {
+      return res.status(400).json({ error: 'shipment_id and order_code required' });
+    }
+    const tracking = await getShipmentStatus(shipment_id);
+    // Robustly extract status, awb, courier from all possible locations
+    let current_status = tracking?.tracking_data?.shipment_status?.current_status ||
+                        tracking?.tracking_data?.shipment_track?.[0]?.current_status ||
+                        'Pending';
+    let awb_code = tracking?.tracking_data?.shipment_status?.awb_code ||
+                  tracking?.tracking_data?.shipment_track?.[0]?.awb_code ||
+                  null;
+    let courier_company_name = tracking?.tracking_data?.shipment_status?.courier_company_name ||
+                              tracking?.tracking_data?.shipment_track?.[0]?.courier_name ||
+                              null;
+    // Try deeper nested fields (shipment_track array)
+    const trackArr = tracking?.data?.shipment_track || tracking?.shipment_track;
+    if (Array.isArray(trackArr) && trackArr.length > 0) {
+      current_status = trackArr[0].current_status || current_status;
+      awb_code = trackArr[0].awb_code || awb_code;
+      courier_company_name = trackArr[0].courier_name || courier_company_name;
+    }
+    // Update order in Supabase
+    const { data, error } = await supabase
+      .from('orders')
+      .update({
+        shiprocket_status: current_status,
+        shiprocket_awb: awb_code,
+        shiprocket_courier: courier_company_name
+      })
+      .eq('order_code', order_code)
+      .select();
+    if (error) {
+      return res.status(500).json({ error: 'Failed to update order with Shiprocket status', details: error });
+    }
+    return res.status(200).json({ status: current_status, awb: awb_code, courier: courier_company_name, order: data?.[0] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Shiprocket Invoice Download and Status Update endpoint
+app.get('/api/shiprocket-invoice/:shipment_id', async (req, res) => {
+  try {
+    const { downloadInvoice, getShipmentStatus } = require('./src/lib/shiprocketService.js');
+    const shipment_id = req.params.shipment_id;
+    // Download invoice PDF from Shiprocket
+    const pdf = await downloadInvoice(shipment_id);
+    // Set headers for PDF download
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', pdf.contentDisposition);
+    // Send PDF buffer (ensure Buffer type)
+    res.end(Buffer.from(pdf.buffer));
+    // After sending PDF, update status in DB (async, no need to await for user)
+    getShipmentStatus(shipment_id).then(async (tracking) => {
+      let current_status = tracking?.tracking_data?.shipment_status?.current_status ||
+                          tracking?.tracking_data?.shipment_track?.[0]?.current_status ||
+                          'Pending';
+      let awb_code = tracking?.tracking_data?.shipment_status?.awb_code ||
+                    tracking?.tracking_data?.shipment_track?.[0]?.awb_code ||
+                    null;
+      let courier_company_name = tracking?.tracking_data?.shipment_status?.courier_company_name ||
+                                tracking?.tracking_data?.shipment_track?.[0]?.courier_name ||
+                                null;
+      // Try deeper nested fields (shipment_track array)
+      const trackArr = tracking?.data?.shipment_track || tracking?.shipment_track;
+      if (Array.isArray(trackArr) && trackArr.length > 0) {
+        current_status = trackArr[0].current_status || current_status;
+        awb_code = trackArr[0].awb_code || awb_code;
+        courier_company_name = trackArr[0].courier_name || courier_company_name;
+      }
+      // Update order in Supabase
+      await supabase
+        .from('orders')
+        .update({
+          shiprocket_status: current_status,
+          shiprocket_awb: awb_code,
+          shiprocket_courier: courier_company_name,
+          order_status: 'INVOICED' // Set business status to INVOICED
+        })
+        .eq('shiprocket_shipment_id', shipment_id);
+    }).catch((err) => {
+      console.error('Failed to update status after invoice download:', err);
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// New endpoint: Download invoice PDF by shipment_id
+app.get('/api/shiprocket-invoice', async (req, res) => {
+  const shipment_id = req.query.shipment_id;
+  if (!shipment_id) {
+    return res.status(400).json({ error: 'shipment_id required' });
+  }
+  try {
+    // Use the print endpoint to trigger status change and get the PDF
+    const result = await printAndDownloadInvoice(shipment_id);
+    if (!result || !result.buffer) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    // Update order status in DB to INVOICED
+    await supabase
+      .from('orders')
+      .update({ shiprocket_status: 'INVOICED', order_status: 'INVOICED' })
+      .eq('shiprocket_shipment_id', shipment_id);
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Content-Disposition', result.contentDisposition);
+    res.send(result.buffer);
+  } catch (err) {
+    res.status(500).json({ error: 'Invoice download failed: ' + (err.message || err) });
+  }
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+// Shiprocket status code to description mapping (updated)
+const SHIPROCKET_STATUS_MAP = {
+  1: 'New',
+  2: 'Invoiced',
+  3: 'Ready To Ship',
+  4: 'Pickup Scheduled',
+  5: 'Canceled',
+  6: 'Shipped',
+  7: 'Delivered',
+  8: 'ePayment Failed',
+  9: 'Returned',
+  10: 'Unmapped',
+  11: 'Unfulfillable',
+  12: 'Pickup Queue',
+  13: 'Pickup Rescheduled',
+  14: 'Pickup Error',
+  15: 'RTO Initiated',
+  16: 'RTO Delivered',
+  17: 'RTO Acknowledged',
+  18: 'Cancellation Requested',
+  19: 'Out for Delivery',
+  20: 'In Transit',
+  21: 'Return Pending',
+  22: 'Return Initiated',
+  23: 'Return Pickup Queued',
+  24: 'Return Pickup Error',
+  25: 'Return In Transit',
+  26: 'Return Delivered',
+  27: 'Return Cancelled',
+  28: 'Return Pickup Generated',
+  29: 'Return Cancellation Requested',
+  30: 'Return Pickup Cancelled',
+  31: 'Return Pickup Rescheduled',
+  32: 'Return Picked Up',
+  33: 'Lost',
+  34: 'Out For Pickup',
+  35: 'Pickup Exception',
+  36: 'Undelivered',
+  37: 'Delivery Delayed',
+  38: 'Partial Delivered',
+  39: 'Destroyed',
+  40: 'Damaged',
+  41: 'Fulfilled',
+  42: 'Archived',
+  43: 'Reached Destination Hub',
+  44: 'Misrouted',
+  45: 'RTO_OFD',
+  46: 'RTO_NDR',
+  47: 'Return Out For Pickup',
+  48: 'Return Out For Delivery',
+  49: 'Return Pickup Exception',
+  50: 'Return Undelivered',
+  51: 'Picked Up',
+  52: 'Self Fulfilled',
+  53: 'Disposed Off',
+  54: 'Canceled before Dispatched',
+  55: 'RTO In-Transit',
+  57: 'QC Failed',
+  58: 'Reached Warehouse',
+  59: 'Custom Cleared',
+  60: 'In Flight',
+  61: 'Handover to Courier',
+  62: 'Booked',
+  64: 'In Transit Overseas',
+  65: 'Connection Aligned',
+  66: 'Reached Overseas Warehouse',
+  67: 'Custom Cleared Overseas',
+  68: 'RETURN ACKNOWLEGED',
+  69: 'Box Packing',
+  70: 'Pickup Booked',
+  71: 'DARKSTORE SCHEDULED',
+  72: 'Allocation in Progress',
+  73: 'FC Allocated',
+  74: 'Picklist Generated',
+  75: 'Ready to Pack',
+  76: 'Packed',
+  80: 'FC MANIFEST GENERATED',
+  81: 'PROCESSED AT WAREHOUSE',
+  82: 'PACKED EXCEPTION',
+  83: 'HANDOVER EXCEPTION',
+  87: 'RTO_LOCK',
+  88: 'UNTRACEABLE',
+  89: 'ISSUE_RELATED_TO_THE_RECIPIENT',
+  90: 'REACHED_BACK_AT_SELLER_CITY'
+};
