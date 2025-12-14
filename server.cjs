@@ -2,7 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const nodemailer = require('nodemailer');
 const cors = require('cors');
-const { createShipment, downloadInvoice, printAndDownloadInvoice } = require('./src/lib/shiprocketService.js');
+// shiprocketService is an ES module; we'll dynamically import it at startup
+let createShipment, downloadInvoice, printAndDownloadInvoice, getTracking, generateAWB, getShipmentStatus;
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -243,7 +244,7 @@ app.post('/api/contact', async (req, res) => {
 // Shiprocket tracking endpoint
 app.get('/api/shiprocket-tracking/:shipment_id', async (req, res) => {
   try {
-    const { getTracking } = require('./src/lib/shiprocketService.js');
+    // getTracking will be provided by shiprocketService after dynamic import
     // Fetch order from DB to get order_code and awb
     const { data: orders, error } = await supabase
       .from('orders')
@@ -351,7 +352,7 @@ app.get('/api/shiprocket-tracking/:shipment_id', async (req, res) => {
 // Admin: Generate AWB and assign courier ("Ship Now")
 app.post('/api/shiprocket-ship-now/:shipment_id', async (req, res) => {
   try {
-    const { generateAWB, getTracking } = require('./src/lib/shiprocketService.js');
+    // generateAWB and getTracking provided by dynamic import
     const shipment_id = req.params.shipment_id;
     // Optionally accept courier_id in body
     const courier_id = req.body.courier_id || null;
@@ -384,7 +385,7 @@ app.post('/api/shiprocket-ship-now/:shipment_id', async (req, res) => {
 // New endpoint: Automatically assign courier and generate AWB for a shipment
 app.post('/api/shiprocket-ship-now', async (req, res) => {
   try {
-    const { generateAWB, getTracking } = require('./src/lib/shiprocketService.js');
+    // generateAWB and getTracking provided by dynamic import
     const { shipment_id } = req.body;
     if (!shipment_id) {
       return res.status(400).json({ error: 'shipment_id is required in the request body' });
@@ -679,7 +680,7 @@ app.post('/api/shiprocket-webhook', async (req, res) => {
 // Shiprocket status sync endpoint (for status refresh and AWB sync)
 app.post('/api/shiprocket-status', async (req, res) => {
   try {
-    const { getShipmentStatus } = require('./src/lib/shiprocketService.js');
+    // getShipmentStatus provided by dynamic import
     const { shipment_id, order_code } = req.body;
     if (!shipment_id || !order_code) {
       return res.status(400).json({ error: 'shipment_id and order_code required' });
@@ -724,7 +725,7 @@ app.post('/api/shiprocket-status', async (req, res) => {
 // Shiprocket Invoice Download and Status Update endpoint
 app.get('/api/shiprocket-invoice/:shipment_id', async (req, res) => {
   try {
-    const { downloadInvoice, getShipmentStatus } = require('./src/lib/shiprocketService.js');
+    // downloadInvoice and getShipmentStatus provided by dynamic import
     const shipment_id = req.params.shipment_id;
     // Download invoice PDF from Shiprocket
     const pdf = await downloadInvoice(shipment_id);
@@ -795,7 +796,25 @@ app.get('/api/shiprocket-invoice', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+// Dynamically import ES module shiprocketService and then start the server
+(async () => {
+  try {
+    const sr = await import('./src/lib/shiprocketService.js');
+    createShipment = sr.createShipment;
+    downloadInvoice = sr.downloadInvoice;
+    printAndDownloadInvoice = sr.printAndDownloadInvoice;
+    getTracking = sr.getTracking;
+    generateAWB = sr.generateAWB;
+    getShipmentStatus = sr.getShipmentStatus;
+    console.log('shiprocketService loaded');
+
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  } catch (err) {
+    console.error('Failed to load shiprocketService module:', err);
+    process.exit(1);
+  }
+})();
 
 // Shiprocket status code to description mapping (updated)
 const SHIPROCKET_STATUS_MAP = {
