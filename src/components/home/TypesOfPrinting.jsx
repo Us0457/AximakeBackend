@@ -21,7 +21,7 @@ import React from 'react';
     const TypesOfPrinting = () => (
       <motion.section
         id="fdm-section"
-        className="pt-6 pb-12 md:pt-8 md:pb-20 bg-white"
+        className="pt-6 pb-1 md:pt-8 md:pb-4 bg-gradient-to-b from-white/95 to-neutral-200/95"
         variants={containerVariants}
         initial="hidden"
         whileInView="visible"

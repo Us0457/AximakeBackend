@@ -53,7 +53,17 @@ export default async function handler(req, res) {
   if (mappedStatus) updates.shiprocket_status = mappedStatus;
   if (shipment_id) updates.shiprocket_shipment_id = String(shipment_id);
   if (awb) updates.shiprocket_awb = String(awb);
-  if (payload.order_id) updates.shiprocket_order_id = payload.order_id;
+  // Shiprocket sends different kinds of order identifiers. Only store/use
+  // `shiprocket_order_id` when it's a numeric ID (bigint). Otherwise treat
+  // the incoming value as an `order_code` string and match on `order_code`.
+  let srOrderId = null;
+  if (payload.sr_order_id || payload.srOrderId || payload.sr_orderId) {
+    srOrderId = payload.sr_order_id || payload.srOrderId || payload.sr_orderId;
+  } else if (payload.order_id && /^[0-9]+$/.test(String(payload.order_id))) {
+    // sometimes Shiprocket posts numeric order ids in `order_id`
+    srOrderId = Number(payload.order_id);
+  }
+  if (srOrderId != null) updates.shiprocket_order_id = srOrderId;
   if (payload.track_url) updates.shiprocket_track_url = payload.track_url;
 
   // Helper to attempt an update and return whether it matched
@@ -79,8 +89,8 @@ export default async function handler(req, res) {
     if (result) return res.status(200).json({ success: true, updatedBy: 'shiprocket_awb', rows: result.length });
   }
 
-  if (payload.order_id) {
-    const result = await tryUpdate({ shiprocket_order_id: payload.order_id });
+  if (srOrderId != null) {
+    const result = await tryUpdate({ shiprocket_order_id: srOrderId });
     if (result) return res.status(200).json({ success: true, updatedBy: 'shiprocket_order_id', rows: result.length });
   }
 
@@ -90,7 +100,7 @@ export default async function handler(req, res) {
     if (order_code) conds.push(`order_code.eq.${order_code}`);
     if (shipment_id) conds.push(`shiprocket_shipment_id.eq.${String(shipment_id)}`);
     if (awb) conds.push(`shiprocket_awb.eq.${String(awb)}`);
-    if (payload.order_id) conds.push(`shiprocket_order_id.eq.${payload.order_id}`);
+    if (srOrderId != null) conds.push(`shiprocket_order_id.eq.${srOrderId}`);
     let candidates = [];
     if (conds.length) {
       const { data } = await supabase.from('orders').select('id,order_code,shiprocket_shipment_id,shiprocket_awb,shiprocket_order_id').or(conds.join(','));

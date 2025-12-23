@@ -26,6 +26,11 @@ const UserOrdersPage = () => {
   const [liveStatuses, setLiveStatuses] = useState({}); // { shipment_id: { status, track_url } }
   const navigate = useNavigate();
 
+  // SEO: page title
+  useEffect(() => {
+    document.title = 'Your Orders — Aximake';
+  }, []);
+
   useEffect(() => {
     const fetchOrders = async () => {
       if (!user) return;
@@ -40,6 +45,15 @@ const UserOrdersPage = () => {
     };
     fetchOrders();
   }, [user]);
+
+  // SEO: title and meta for user orders
+  useEffect(() => {
+    document.title = 'Your Orders — Aximake';
+    const desc = 'View your orders and tracking information at Aximake.';
+    let m = document.querySelector('meta[name="description"]');
+    if (!m) { m = document.createElement('meta'); m.name = 'description'; document.head.appendChild(m); }
+    m.content = desc.slice(0, 160);
+  }, []);
 
   // --- Real-time subscription for Shiprocket status updates ---
   useEffect(() => {
@@ -310,9 +324,10 @@ const UserOrdersPage = () => {
                             </span></span>
                           )}
                           {item.infill && <span>Infill: <span className="font-semibold text-indigo-700">{item.infill}%</span></span>}
-                          {item.product_id && <span>Product ID: <span className="font-semibold text-indigo-700">{item.product_id}</span></span>}
+                          {/* Product ID removed from UI per design */}
+                          {item.sku && <span>SKU: <span className="font-mono font-semibold text-indigo-700">{item.sku}</span></span>}
                         </div>
-                        {item.description && <div className="text-xs text-gray-700 mb-1">{item.description}</div>}
+                        {/* Product description removed from order item display (UI-only change) */}
                         <div className="flex items-center gap-4 mt-1">
                           <span className="font-bold text-primary">Qty: {item.quantity}</span>
                           <span className="font-bold text-primary">₹{Math.round(Number(item.price)).toLocaleString()}</span>

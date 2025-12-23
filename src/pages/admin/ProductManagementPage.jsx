@@ -7,10 +7,13 @@ import { useToast } from '@/components/ui/use-toast';
 
 const ProductManagementPage = () => {
   const [products, setProducts] = useState([]);
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(25);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [editingProduct, setEditingProduct] = useState(null);
-  const [newProduct, setNewProduct] = useState({ name: "", category: "", price: 0, original_price: '', stock: 0, visible: true, featured: false, description: "", material: "", weight: "", dimensions: "", short_description: "", difficulty: "", includes: "", outcomes: "", specifications: "", documentation: "", faq: "" });
+  // Add `sku` to product creation state. SKU must be exactly 8 characters.
+  const [newProduct, setNewProduct] = useState({ sku: '', name: "", category: "", price: 0, original_price: '', stock: 0, visible: true, featured: false, description: "", material: "", weight: "", dimensions: "", short_description: "", difficulty: "", includes: "", outcomes: "", specifications: "", documentation: "", faq: "" });
   const [imageFiles, setImageFiles] = useState([]);
   const { toast } = useToast();
   const [uploading, setUploading] = useState(false);
@@ -166,6 +169,29 @@ const ProductManagementPage = () => {
     setUploading(true);
     setSuccessMsg("");
     setErrorMsg("");
+    // SKU validation: trim and enforce exactly 8 characters if provided
+    const providedSKU = (newProduct.sku || '').toString().trim();
+    if (providedSKU && providedSKU.length !== 8) {
+      setUploading(false);
+      const msg = 'SKU must be exactly 8 characters.';
+      setErrorMsg(msg);
+      toast({ title: 'Invalid SKU', description: msg, variant: 'destructive' });
+      return;
+    }
+    // If SKU provided, ensure uniqueness
+    if (providedSKU) {
+      const { data: existing, error: skuErr } = await supabase.from('products').select('id').eq('sku', providedSKU).maybeSingle();
+      if (skuErr) {
+        console.warn('SKU uniqueness check failed', skuErr);
+      }
+      if (existing && existing.id) {
+        setUploading(false);
+        const msg = 'SKU already exists for another product.';
+        setErrorMsg(msg);
+        toast({ title: 'SKU Exists', description: msg, variant: 'destructive' });
+        return;
+      }
+    }
     let imageUrls = [];
     if (imageFiles.length > 0) {
       for (let file of imageFiles) {
@@ -297,6 +323,26 @@ const ProductManagementPage = () => {
     }
     const faqForStore = (faqArray && faqArray.length > 0) ? JSON.stringify(faqArray) : '';
 
+    // SKU: trim and validate length; check uniqueness if changed
+    const skuTrimmed = (editingProduct.sku || '').toString().trim();
+    if (skuTrimmed && skuTrimmed.length !== 8) {
+      setUploading(false);
+      const msg = 'SKU must be exactly 8 characters.';
+      setErrorMsg(msg);
+      toast({ title: 'Invalid SKU', description: msg, variant: 'destructive' });
+      return;
+    }
+    if (skuTrimmed) {
+      const { data: existing } = await supabase.from('products').select('id').eq('sku', skuTrimmed).maybeSingle();
+      if (existing && existing.id && existing.id !== editingProduct.id) {
+        setUploading(false);
+        const msg = 'SKU already exists for another product.';
+        setErrorMsg(msg);
+        toast({ title: 'SKU Exists', description: msg, variant: 'destructive' });
+        return;
+      }
+    }
+
     const sanitizedProduct = sanitizeProductData({
       ...editingProduct,
       images: JSON.stringify(imagePaths),
@@ -340,67 +386,188 @@ const ProductManagementPage = () => {
   }
 
   // Bulk upload handler
+  // const handleBulkUpload = async (e) => {
+  //   setUploading(true);
+  //   setSuccessMsg("");
+  //   setErrorMsg("");
+  //   const file = e.target.files[0];
+  //   if (!file) return;
+  //   const reader = new FileReader();
+  //   reader.onload = async (evt) => {
+  //     const data = new Uint8Array(evt.target.result);
+  //     const workbook = XLSX.read(data, { type: 'array' });
+  //     const sheetName = workbook.SheetNames[0];
+  //     const worksheet = workbook.Sheets[sheetName];
+  //     const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+  //     const [header, ...rows] = json;
+  //     const productsToInsert = rows.map(row => {
+  //       const obj = {};
+  //       header.forEach((key, idx) => {
+  //         obj[key.toLowerCase()] = row[idx];
+  //       });
+  //       // Normalize images field
+  //       if (obj.images) {
+  //         let images = obj.images;
+  //         if (typeof images === 'string') {
+  //           // Remove curly braces and quotes
+  //           images = images.replace(/[{}'"]/g, '').trim();
+  //           // Split by comma if needed
+  //           let arr = images.split(',').map(s => s.trim()).filter(Boolean);
+  //           obj.images = JSON.stringify(arr);
+  //         } else if (Array.isArray(images)) {
+  //           obj.images = JSON.stringify(images.filter(Boolean));
+  //         }
+  //       } else {
+  //         obj.images = JSON.stringify([]);
+  //       }
+  //       // Sanitize numeric fields
+  //       const numericFields = ['price', 'stock', 'weight'];
+  //       numericFields.forEach(field => {
+  //         if (obj[field] === '' || obj[field] === undefined) {
+  //           obj[field] = null;
+  //         } else if (typeof obj[field] === 'string') {
+  //           const num = Number(obj[field]);
+  //           obj[field] = isNaN(num) ? null : num;
+  //         }
+  //       });
+  //       obj.visible = Boolean(obj.visible);
+  //       obj.featured = Boolean(obj.featured);
+  //       return obj;
+  //     });
+  //     const { error } = await supabase.from('products').insert(productsToInsert);
+  //     setUploading(false);
+  //     if (error) {
+  //       setErrorMsg(error.message);
+  //       toast({ title: 'Error', description: error.message, variant: 'destructive' });
+  //     } else {
+  //       setSuccessMsg("Bulk upload successful!");
+  //       toast({ title: 'Success', description: 'Bulk upload successful!' });
+  //       fetchProducts();
+  //     }
+  //   };
+  //   reader.readAsArrayBuffer(file);
+  // };
+  // Bulk upload handler (SAFE, mirrors Product Creation)
   const handleBulkUpload = async (e) => {
     setUploading(true);
     setSuccessMsg("");
     setErrorMsg("");
+
     const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      const data = new Uint8Array(evt.target.result);
-      const workbook = XLSX.read(data, { type: 'array' });
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-      const [header, ...rows] = json;
-      const productsToInsert = rows.map(row => {
-        const obj = {};
-        header.forEach((key, idx) => {
-          obj[key.toLowerCase()] = row[idx];
-        });
-        // Normalize images field
-        if (obj.images) {
-          let images = obj.images;
-          if (typeof images === 'string') {
-            // Remove curly braces and quotes
-            images = images.replace(/[{}'"]/g, '').trim();
-            // Split by comma if needed
-            let arr = images.split(',').map(s => s.trim()).filter(Boolean);
-            obj.images = JSON.stringify(arr);
-          } else if (Array.isArray(images)) {
-            obj.images = JSON.stringify(images.filter(Boolean));
-          }
-        } else {
-          obj.images = JSON.stringify([]);
-        }
-        // Sanitize numeric fields
-        const numericFields = ['price', 'stock', 'weight'];
-        numericFields.forEach(field => {
-          if (obj[field] === '' || obj[field] === undefined) {
-            obj[field] = null;
-          } else if (typeof obj[field] === 'string') {
-            const num = Number(obj[field]);
-            obj[field] = isNaN(num) ? null : num;
-          }
-        });
-        obj.visible = Boolean(obj.visible);
-        obj.featured = Boolean(obj.featured);
-        return obj;
-      });
-      const { error } = await supabase.from('products').insert(productsToInsert);
+    if (!file) {
       setUploading(false);
-      if (error) {
-        setErrorMsg(error.message);
-        toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      } else {
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = async (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        const [header, ...rows] = json;
+
+        if (!header || header.length === 0) {
+          throw new Error("CSV header row is missing.");
+        }
+
+        const productsToInsert = rows.map((row, rowIndex) => {
+          const obj = {};
+
+          // Map CSV columns → object
+          header.forEach((key, idx) => {
+            obj[key.toLowerCase().trim()] = row[idx];
+          });
+
+          // --- SKU ---
+          if (obj.sku) {
+            obj.sku = String(obj.sku).trim();
+            if (obj.sku.length !== 8) {
+              throw new Error(`Row ${rowIndex + 2}: SKU must be exactly 8 characters.`);
+            }
+          }
+
+          // --- Numbers ---
+          ["price", "original_price", "stock", "weight"].forEach((field) => {
+            if (obj[field] === "" || obj[field] === undefined) {
+              obj[field] = null;
+            } else {
+              const num = Number(obj[field]);
+              obj[field] = isNaN(num) ? null : num;
+            }
+          });
+
+          // --- Original Price Rule ---
+          if (
+            obj.original_price !== null &&
+            obj.price !== null &&
+            obj.original_price <= obj.price
+          ) {
+            obj.original_price = null;
+          }
+
+          // --- Booleans ---
+          obj.visible = String(obj.visible).toLowerCase() === "true";
+          obj.featured = String(obj.featured).toLowerCase() === "true";
+
+          // --- Includes / Outcomes ---
+          obj.includes = parseCommaSeparated(obj.includes);
+          obj.outcomes = parseCommaSeparated(obj.outcomes);
+
+          // --- Specifications / FAQ ---
+          obj.specifications = (() => {
+            const s = normalizeSpecifications(obj.specifications);
+            return typeof s === "object" ? JSON.stringify(s) : (s || "");
+          })();
+
+          obj.faq = (() => {
+            const f = normalizeFAQ(obj.faq);
+            return Array.isArray(f) ? JSON.stringify(f) : "";
+          })();
+
+          // --- Images ---
+          if (obj.images) {
+            const imgs = String(obj.images)
+              .replace(/[{}'"]/g, "")
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            obj.images = JSON.stringify(imgs);
+          } else {
+            obj.images = JSON.stringify([]);
+          }
+
+          return sanitizeProductData(obj);
+        });
+
+        // Insert ONLY after all rows are valid
+        const { error } = await supabase.from("products").insert(productsToInsert);
+
+        if (error) throw error;
+
         setSuccessMsg("Bulk upload successful!");
-        toast({ title: 'Success', description: 'Bulk upload successful!' });
+        toast({ title: "Success", description: "Bulk upload successful!" });
         fetchProducts();
+      } catch (err) {
+        setErrorMsg(err.message);
+        toast({
+          title: "Bulk Upload Failed",
+          description: err.message,
+          variant: "destructive",
+        });
+      } finally {
+        setUploading(false);
+        e.target.value = ""; // reset file input
       }
     };
+
     reader.readAsArrayBuffer(file);
   };
+
 
   // When opening the edit modal, ensure images and description are always present and parsed correctly
   useEffect(() => {
@@ -475,13 +642,16 @@ const ProductManagementPage = () => {
   }
 
   return (
-    <div className="max-w-7xl mx-auto py-10 px-4">
+    <div className="max-w-7xl mx-auto py-0 px-4">
       <h1 className="text-3xl font-bold mb-6 text-primary">Product Management</h1>
       <div className="bg-white rounded-xl shadow p-6 mb-8 space-y-6">
         <form onSubmit={handleAddProduct} className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="space-y-4">
             <label className="block font-medium text-sm text-zinc-700">Name
               <Input placeholder="Name" value={newProduct.name} onChange={e => setNewProduct(p => ({ ...p, name: e.target.value }))} required className="mt-1" />
+            </label>
+            <label className="block font-medium text-sm text-zinc-700">SKU (8 chars)
+              <Input placeholder="Exact 8 characters" value={newProduct.sku} onChange={e => setNewProduct(p => ({ ...p, sku: e.target.value }))} className="mt-1" />
             </label>
             <label className="block font-medium text-sm text-zinc-700">Description
               <Input placeholder="Description" value={newProduct.description || ""} onChange={e => setNewProduct(p => ({ ...p, description: e.target.value }))} className="mt-1" />
@@ -564,6 +734,23 @@ const ProductManagementPage = () => {
       <div className="flex justify-between mb-4">
         <Input placeholder="Search products..." value={search} onChange={e => setSearch(e.target.value)} className="max-w-xs" />
       </div>
+      {/* Pagination controls */}
+      <div className="flex items-center justify-between gap-4 mb-3">
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-zinc-700">Show:</label>
+          <select value={perPage} onChange={e => { setPerPage(Number(e.target.value)); setPage(1); }} className="border px-2 py-1 rounded text-sm">
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-2 text-sm text-zinc-600">
+          <button onClick={() => setPage(p => Math.max(1, p-1))} disabled={page === 1} className="px-2 py-1 rounded border bg-white">Prev</button>
+          <div>Page {page} of {Math.max(1, Math.ceil(filteredProducts().length / perPage))}</div>
+          <button onClick={() => setPage(p => Math.min(Math.max(1, Math.ceil(filteredProducts().length / perPage)), p+1))} disabled={page >= Math.ceil(filteredProducts().length / perPage)} className="px-2 py-1 rounded border bg-white">Next</button>
+        </div>
+      </div>
+
       <div className="overflow-x-auto rounded-lg shadow border border-gray-200 bg-white">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
@@ -582,7 +769,13 @@ const ProductManagementPage = () => {
               <tr><td colSpan={7} className="py-8 text-center text-gray-400">Loading...</td></tr>
             ) : filteredProducts().length === 0 ? (
               <tr><td colSpan={7} className="py-8 text-center text-gray-400">No products found.</td></tr>
-            ) : filteredProducts().map(p => (
+            ) : (
+              (() => {
+                const all = filteredProducts();
+                const totalPages = Math.max(1, Math.ceil(all.length / perPage));
+                const start = (page - 1) * perPage;
+                const paginated = all.slice(start, start + perPage);
+                return paginated.map(p => (
               <tr key={p.id} className="hover:bg-gray-50 transition">
                 <td className="px-4 py-3 font-medium text-primary underline cursor-pointer" onClick={() => {
                   // Parse images if needed
@@ -619,120 +812,137 @@ const ProductManagementPage = () => {
                   <Button size="sm" variant="destructive" onClick={() => handleDeleteProduct(p.id)}>Delete</Button>
                 </td>
               </tr>
-            ))}
+                ));
+              })()
+            )}
           </tbody>
         </table>
       </div>
       {/* Edit Product Modal */}
       {editingProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-lg shadow-lg p-8 max-w-3xl w-full relative">
-            <button className="absolute top-2 right-2 text-gray-400 hover:text-primary" onClick={() => setEditingProduct(null)}>&times;</button>
-            <h2 className="text-2xl font-bold mb-4 text-primary">Edit Product</h2>
-            <form onSubmit={e => { e.preventDefault(); handleUpdateProduct(); }} className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <label className="block font-medium text-sm text-zinc-700">Name
-                  <Input placeholder="Name" value={editingProduct.name} onChange={e => setEditingProduct(p => ({ ...p, name: e.target.value }))} required className="mt-1" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">Description
-                  <Input placeholder="Description" value={editingProduct.description || ""} onChange={e => setEditingProduct(p => ({ ...p, description: e.target.value }))} className="mt-1" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">Category
-                  <Input placeholder="Category" value={editingProduct.category} onChange={e => setEditingProduct(p => ({ ...p, category: e.target.value }))} className="mt-1" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">Material
-                  <Input placeholder="Material" value={editingProduct.material || ''} onChange={e => setEditingProduct(p => ({ ...p, material: e.target.value }))} className="mt-1" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">Weight (g)
-                  <Input placeholder="Weight" type="number" min={0} value={editingProduct.weight || ''} onChange={e => setEditingProduct(p => ({ ...p, weight: e.target.value }))} className="mt-1" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">Dimensions
-                  <Input placeholder="Dimensions (e.g. 10x10x10cm)" value={editingProduct.dimensions || ''} onChange={e => setEditingProduct(p => ({ ...p, dimensions: e.target.value }))} className="mt-1" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">Short Description
-                  <Input placeholder="Short description for listing" value={editingProduct.short_description || ''} onChange={e => setEditingProduct(p => ({ ...p, short_description: e.target.value }))} className="mt-1" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">Difficulty
-                  <Input placeholder="Difficulty (e.g. Beginner)" value={editingProduct.difficulty || ''} onChange={e => setEditingProduct(p => ({ ...p, difficulty: e.target.value }))} className="mt-1" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">Includes (comma-separated)
-                  <Input placeholder="e.g. Arduino UNO, USB cable, Sensors" value={Array.isArray(editingProduct.includes) ? editingProduct.includes.join(', ') : (editingProduct.includes || '')} onChange={e => setEditingProduct(p => ({ ...p, includes: e.target.value }))} className="mt-1" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">Outcomes (comma-separated)
-                  <Input placeholder="e.g. Build IoT projects, Learn sensors" value={Array.isArray(editingProduct.outcomes) ? editingProduct.outcomes.join(', ') : (editingProduct.outcomes || '')} onChange={e => setEditingProduct(p => ({ ...p, outcomes: e.target.value }))} className="mt-1" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">Specifications
-                  <textarea placeholder="Specifications or technical notes" value={editingProduct.specifications || ''} onChange={e => setEditingProduct(p => ({ ...p, specifications: e.target.value }))} className="mt-1 w-full border rounded p-2 text-sm" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">Documentation URL
-                  <Input placeholder="Documentation URL or notes" value={editingProduct.documentation || ''} onChange={e => setEditingProduct(p => ({ ...p, documentation: e.target.value }))} className="mt-1" />
-                </label>
-                <label className="block font-medium text-sm text-zinc-700">FAQ
-                  <textarea placeholder="FAQ or common questions" value={editingProduct.faq || ''} onChange={e => setEditingProduct(p => ({ ...p, faq: e.target.value }))} className="mt-1 w-full border rounded p-2 text-sm" />
-                </label>
+          <div className="bg-white rounded-lg shadow-lg max-w-4xl w-full relative max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b bg-white sticky top-0 z-20 shadow-sm">
+              <h2 className="text-2xl font-bold text-primary">Edit Product</h2>
+              <div className="flex items-center gap-2">
+                <button className="text-gray-500 hover:text-primary px-2 py-1 rounded" onClick={() => setEditingProduct(null)} aria-label="Close">Cancel</button>
+                <button className="text-gray-400 hover:text-primary" onClick={() => setEditingProduct(null)} aria-label="Close">&times;</button>
               </div>
-              <div className="space-y-4 flex flex-col justify-between">
-                <div>
-                  <label className="block font-medium text-sm text-zinc-700">Price
-                    <Input placeholder="Price" type="number" min={0} value={editingProduct.price} onChange={e => setEditingProduct(p => ({ ...p, price: +e.target.value }))} required className="mt-1" />
-                  </label>
-                  <label className="block font-medium text-sm text-zinc-700">Original Price (MRP)
-                    <Input placeholder="Original price / MRP" type="number" min={0} value={editingProduct.original_price || ''} onChange={e => setEditingProduct(p => ({ ...p, original_price: e.target.value }))} className="mt-1" />
-                  </label>
-                  <label className="block font-medium text-sm text-zinc-700">Stock
-                    <Input placeholder="Stock" type="number" min={0} value={editingProduct.stock} onChange={e => setEditingProduct(p => ({ ...p, stock: +e.target.value }))} required className="mt-1" />
-                  </label>
-                  <label className="block font-medium text-sm text-zinc-700">Images
-                    <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="mt-1" />
-                    {/* Always show existing images if no new files are selected */}
-                    {(!imageFiles.length && getImageArray(editingProduct.images).length > 0) && (
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {getImageArray(editingProduct.images).map((img, idx) => {
-                          if (!img) return null;
-                          let src = img.startsWith('http') ? img : `https://wruysjrqadlsljnkmnte.supabase.co/storage/v1/object/public/product-images/${img}`;
-                          return (
-                            <div key={idx} className="relative group">
-                              <img src={src} alt="Product" className="w-16 h-16 object-cover rounded border" />
-                              <button
-                                type="button"
-                                className="absolute top-1 right-1 bg-white/80 rounded-full p-1 shadow group-hover:opacity-100 opacity-70 transition"
-                                title="Remove image"
-                                onClick={() => {
-                                  setEditingProduct(p => ({
-                                    ...p,
-                                    images: getImageArray(p.images).filter((_, i) => i !== idx)
-                                  }));
-                                }}
-                              >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                    {/* Show preview of new files if selected */}
-                    {imageFiles.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {imageFiles.map((file, idx) => (
-                          <span key={idx} className="text-xs bg-zinc-100 px-2 py-1 rounded border border-zinc-200">{file.name}</span>
-                        ))}
-                      </div>
-                    )}
-                  </label>
+            </div>
+            <form onSubmit={e => { e.preventDefault(); handleUpdateProduct(); }} className="flex flex-col flex-1 min-h-0">
+              <div className="overflow-auto p-4"> 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-4">
+                    <label className="block font-medium text-sm text-zinc-700">Name
+                      <Input placeholder="Name" value={editingProduct.name} onChange={e => setEditingProduct(p => ({ ...p, name: e.target.value }))} required className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">SKU (8 chars)
+                      <Input placeholder="Exact 8 characters" value={editingProduct.sku || ''} onChange={e => setEditingProduct(p => ({ ...p, sku: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Description
+                      <Input placeholder="Description" value={editingProduct.description || ""} onChange={e => setEditingProduct(p => ({ ...p, description: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Category
+                      <Input placeholder="Category" value={editingProduct.category} onChange={e => setEditingProduct(p => ({ ...p, category: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Material
+                      <Input placeholder="Material" value={editingProduct.material || ''} onChange={e => setEditingProduct(p => ({ ...p, material: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Weight (g)
+                      <Input placeholder="Weight" type="number" min={0} value={editingProduct.weight || ''} onChange={e => setEditingProduct(p => ({ ...p, weight: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Dimensions
+                      <Input placeholder="Dimensions (e.g. 10x10x10cm)" value={editingProduct.dimensions || ''} onChange={e => setEditingProduct(p => ({ ...p, dimensions: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Short Description
+                      <Input placeholder="Short description for listing" value={editingProduct.short_description || ''} onChange={e => setEditingProduct(p => ({ ...p, short_description: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Difficulty
+                      <Input placeholder="Difficulty (e.g. Beginner)" value={editingProduct.difficulty || ''} onChange={e => setEditingProduct(p => ({ ...p, difficulty: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Includes (comma-separated)
+                      <Input placeholder="e.g. Arduino UNO, USB cable, Sensors" value={Array.isArray(editingProduct.includes) ? editingProduct.includes.join(', ') : (editingProduct.includes || '')} onChange={e => setEditingProduct(p => ({ ...p, includes: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Outcomes (comma-separated)
+                      <Input placeholder="e.g. Build IoT projects, Learn sensors" value={Array.isArray(editingProduct.outcomes) ? editingProduct.outcomes.join(', ') : (editingProduct.outcomes || '')} onChange={e => setEditingProduct(p => ({ ...p, outcomes: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Specifications
+                      <textarea placeholder="Specifications or technical notes" value={editingProduct.specifications || ''} onChange={e => setEditingProduct(p => ({ ...p, specifications: e.target.value }))} className="mt-1 w-full border rounded p-2 text-sm" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Documentation URL
+                      <Input placeholder="Documentation URL or notes" value={editingProduct.documentation || ''} onChange={e => setEditingProduct(p => ({ ...p, documentation: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">FAQ
+                      <textarea placeholder="FAQ or common questions" value={editingProduct.faq || ''} onChange={e => setEditingProduct(p => ({ ...p, faq: e.target.value }))} className="mt-1 w-full border rounded p-2 text-sm" />
+                    </label>
+                  </div>
+                  <div className="space-y-4">
+                    <label className="block font-medium text-sm text-zinc-700">Price
+                      <Input placeholder="Price" type="number" min={0} value={editingProduct.price} onChange={e => setEditingProduct(p => ({ ...p, price: +e.target.value }))} required className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Original Price (MRP)
+                      <Input placeholder="Original price / MRP" type="number" min={0} value={editingProduct.original_price || ''} onChange={e => setEditingProduct(p => ({ ...p, original_price: e.target.value }))} className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Stock
+                      <Input placeholder="Stock" type="number" min={0} value={editingProduct.stock} onChange={e => setEditingProduct(p => ({ ...p, stock: +e.target.value }))} required className="mt-1" />
+                    </label>
+                    <label className="block font-medium text-sm text-zinc-700">Images
+                      <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="mt-1" />
+                      {/* Always show existing images if no new files are selected */}
+                      {(!imageFiles.length && getImageArray(editingProduct.images).length > 0) && (
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {getImageArray(editingProduct.images).map((img, idx) => {
+                            if (!img) return null;
+                            let src = img.startsWith('http') ? img : `https://wruysjrqadlsljnkmnte.supabase.co/storage/v1/object/public/product-images/${img}`;
+                            return (
+                              <div key={idx} className="relative group">
+                                <img src={src} alt="Product" className="w-16 h-16 object-cover rounded border" />
+                                <button
+                                  type="button"
+                                  className="absolute top-1 right-1 bg-white/80 rounded-full p-1 shadow group-hover:opacity-100 opacity-70 transition"
+                                  title="Remove image"
+                                  onClick={() => {
+                                    setEditingProduct(p => ({
+                                      ...p,
+                                      images: getImageArray(p.images).filter((_, i) => i !== idx)
+                                    }));
+                                  }}
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {/* Show preview of new files if selected */}
+                      {imageFiles.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {imageFiles.map((file, idx) => (
+                            <span key={idx} className="text-xs bg-zinc-100 px-2 py-1 rounded border border-zinc-200">{file.name}</span>
+                          ))}
+                        </div>
+                      )}
+                    </label>
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-4 items-center mt-4">
+              </div>
+              <div className="border-t p-4 bg-white/95 backdrop-blur-sm flex items-center justify-between sticky bottom-0 z-20 shadow-sm">
+                <div className="flex items-center gap-4">
                   <label className="flex items-center gap-2 text-sm">
                     <input type="checkbox" checked={editingProduct.visible} onChange={e => setEditingProduct(p => ({ ...p, visible: e.target.checked }))} /> Visible
                   </label>
                   <label className="flex items-center gap-2 text-sm">
                     <input type="checkbox" checked={editingProduct.featured} onChange={e => setEditingProduct(p => ({ ...p, featured: e.target.checked }))} /> Featured
                   </label>
-                  <Button type="submit" disabled={uploading}>{uploading ? 'Saving...' : 'Save Changes'}</Button>
                 </div>
-                {(successMsg || errorMsg) && (
-                  <div className={`rounded p-3 text-sm font-medium ${successMsg ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'} mt-2`}>{successMsg || errorMsg}</div>
-                )}
+                <div className="flex items-center gap-3">
+                  <button type="button" className="px-3 py-1 rounded border" onClick={() => setEditingProduct(null)}>Cancel</button>
+                  <Button type="submit" disabled={uploading} className="px-4 py-2">{uploading ? 'Saving...' : 'Save Changes'}</Button>
+                  {(successMsg || errorMsg) && (
+                    <div className={`rounded p-3 text-sm font-medium ${successMsg ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>{successMsg || errorMsg}</div>
+                  )}
+                </div>
               </div>
             </form>
           </div>

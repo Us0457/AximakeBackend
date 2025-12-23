@@ -501,9 +501,9 @@ const OrderManagementPage = () => {
                             </span></span>
                           )}
                           {item.infill && <span>Infill: <span className="font-semibold text-indigo-700">{item.infill}%</span></span>}
-                          {item.product_id && <span>Product ID: <span className="font-semibold text-indigo-700">{item.product_id}</span></span>}
+                          {/* Product ID removed from UI per design */}
                         </div>
-                        {item.description && <div className="text-xs text-gray-700 mb-1">{item.description}</div>}
+                        {/* Product description removed from order item display (UI-only change) */}
                         <div className="flex items-center gap-4 mt-1">
                           <span className="font-bold text-primary">Qty: {item.quantity}</span>
                           <span className="font-bold text-primary">₹{Math.round(Number(item.price)).toLocaleString()}</span>

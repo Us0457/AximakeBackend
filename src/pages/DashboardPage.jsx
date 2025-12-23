@@ -170,7 +170,8 @@ import { supabase } from '../lib/supabaseClient';
           }
         }
         setSelectedQuotes([]);
-        // Optionally: show a toast or reload cart count
+        // Notify listeners so header/cart counter updates immediately
+        window.dispatchEvent(new Event('cart-updated'));
       };
 
       return (
@@ -179,7 +180,7 @@ import { supabase } from '../lib/supabaseClient';
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -20 }}
           transition={{ duration: 0.3 }}
-          className="container mx-auto px-4 py-10 min-h-[calc(100vh-6rem)] flex flex-col items-center"
+          className="container mx-auto px-4 py-0 min-h-[calc(100vh-6rem)] flex flex-col items-center"
         >
           <style>
             @media (max-width: 520px) {'{'}

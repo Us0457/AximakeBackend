@@ -233,18 +233,29 @@ app.post('/api/create-shiprocket-order', async (req, res) => {
 });
 
 // Configure your Gmail SMTP transporter (credentials read from environment)
+const smtpHost = process.env.SMTP_HOST;
+const smtpPort = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined;
+const smtpSecure = (process.env.SMTP_SECURE || 'ssl') === 'ssl' || (process.env.SMTP_SECURE || '').toLowerCase() === 'true';
 const smtpUser = process.env.SMTP_USER;
 const smtpPass = process.env.SMTP_PASS;
 if (!smtpUser || !smtpPass) {
   console.warn('SMTP_USER or SMTP_PASS not set in environment. Email sending will fail.');
 }
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: smtpUser,
-    pass: smtpPass
-  }
-});
+let transporter;
+if (smtpHost && smtpPort) {
+  transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpSecure,
+    auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined
+  });
+} else {
+  // Fallback to Gmail service when explicit host/port not provided
+  transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: smtpUser, pass: smtpPass }
+  });
+}
 
 app.post('/api/contact', async (req, res) => {
   const { name, email, subject, message } = req.body;
@@ -538,6 +549,13 @@ app.post('/api/shiprocket-webhook', async (req, res) => {
     const payload = req.body;
     // Extract relevant fields
     const order_id = payload.order_id || payload.order_code || null;
+    // Determine numeric Shiprocket order id (bigint) when available.
+    let srOrderId = null;
+    if (payload.sr_order_id || payload.srOrderId || payload.sr_orderId) {
+      srOrderId = payload.sr_order_id || payload.srOrderId || payload.sr_orderId;
+    } else if (payload.order_id && /^[0-9]+$/.test(String(payload.order_id))) {
+      srOrderId = Number(payload.order_id);
+    }
     const shipment_id = payload.shipment_id || null;
     const current_status = payload.current_status || payload.status || null;
     const awb = payload.awb || payload.awb_code || null;
@@ -651,8 +669,8 @@ app.post('/api/shiprocket-webhook', async (req, res) => {
         if (result) matched = true;
       }
       // 2) Try shiprocket_order_id (numeric Shiprocket order id)
-      if (!matched && order_id) {
-        const result = await mergeAndUpdate({ shiprocket_order_id: order_id });
+      if (!matched && srOrderId != null) {
+        const result = await mergeAndUpdate({ shiprocket_order_id: srOrderId });
         if (result) matched = true;
       }
       // 3) Try order_code (our internal order_code may be sent as order_id)
@@ -675,7 +693,7 @@ app.post('/api/shiprocket-webhook', async (req, res) => {
       try {
         const candidates = await Promise.all([
           shipment_id ? supabase.from('orders').select('order_code,shiprocket_shipment_id,shiprocket_order_id,shiprocket_awb').eq('shiprocket_shipment_id', String(shipment_id)).limit(5) : Promise.resolve({ data: [] }),
-          order_id ? supabase.from('orders').select('order_code,shiprocket_shipment_id,shiprocket_order_id,shiprocket_awb').eq('shiprocket_order_id', order_id).limit(5) : Promise.resolve({ data: [] }),
+          srOrderId != null ? supabase.from('orders').select('order_code,shiprocket_shipment_id,shiprocket_order_id,shiprocket_awb').eq('shiprocket_order_id', srOrderId).limit(5) : Promise.resolve({ data: [] }),
           order_id ? supabase.from('orders').select('order_code,shiprocket_shipment_id,shiprocket_order_id,shiprocket_awb').eq('order_code', order_id).limit(5) : Promise.resolve({ data: [] }),
           awb ? supabase.from('orders').select('order_code,shiprocket_shipment_id,shiprocket_order_id,shiprocket_awb').eq('shiprocket_awb', String(awb)).limit(5) : Promise.resolve({ data: [] })
         ]);

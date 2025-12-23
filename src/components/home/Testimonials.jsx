@@ -3,33 +3,63 @@ import React, { useState, useEffect, useRef } from 'react';
     import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
     import { motion } from 'framer-motion';
     import { containerVariants, itemVariants } from '@/components/home/motionVariants';
+import { supabase } from '@/lib/supabaseClient';
 
-    const testimonialsData = [
-      { name: "Sarah L.", quote: "Aximake delivered my prototype parts incredibly fast and the quality was outstanding. Their team was super helpful throughout the process!", avatarSeed: "Sarah", alt: "Avatar of Sarah L." },
-      { name: "Mike P.", quote: "I needed a custom enclosure for my electronics project, and Aximake nailed it. The precision and material strength were exactly what I hoped for.", avatarSeed: "Mike", alt: "Avatar of Mike P." },
-      { name: "Innovatech Ltd.", quote: "We've partnered with Aximake for multiple short-run production parts. Their reliability and consistent quality are why we keep coming back.", avatarSeed: "Innovatech", alt: "Avatar of Innovatech Ltd." },
-      { name: "Priya S.", quote: "The design team at Aximake helped me optimize my 3D model for printing. The results were perfect and the price was fair.", avatarSeed: "Priya", alt: "Avatar of Priya S." },
-      { name: "Rohit G.", quote: "Excellent customer service and fast turnaround. I recommend Aximake to anyone needing custom prints.", avatarSeed: "Rohit", alt: "Avatar of Rohit G." },
-      { name: "TechMakers Inc.", quote: "Aximake's attention to detail and quality control is top-notch. Our clients are always happy with the parts we source from them.", avatarSeed: "TechMakers", alt: "Avatar of TechMakers Inc." },
-      { name: "Emily W.", quote: "I was amazed by the finish and strength of the parts. The online ordering process was smooth and easy.", avatarSeed: "Emily", alt: "Avatar of Emily W." },
-      { name: "Arjun V.", quote: "Aximake's team went above and beyond to meet my tight deadline. Will use again!", avatarSeed: "Arjun", alt: "Avatar of Arjun V." },
+    // Keep a small fallback list only for development; production should fetch from DB.
+    const FALLBACK_TESTIMONIALS = [
+      { id: 1, name: "Sarah L.", quote: "Aximake delivered my prototype parts incredibly fast and the quality was outstanding.", avatarSeed: "Sarah", alt: "Avatar of Sarah L.", rating: 5 },
+      { id: 2, name: "Mike P.", quote: "I needed a custom enclosure for my electronics project, and Aximake nailed it.", avatarSeed: "Mike", alt: "Avatar of Mike P.", rating: 5 },
     ];
 
     const AUTO_SCROLL_INTERVAL = 5000; // ms
 
     const Testimonials = () => {
+      const [testimonials, setTestimonials] = useState(FALLBACK_TESTIMONIALS);
       const [current, setCurrent] = useState(0);
       const [paused, setPaused] = useState(false);
       const timeoutRef = useRef(null);
+      const dragThreshold = 80; // px to trigger swipe
 
       useEffect(() => {
-        if (!paused) {
+        if (!paused && testimonials.length > 0) {
           timeoutRef.current = setTimeout(() => {
-            setCurrent((prev) => (prev + 1) % testimonialsData.length);
+            setCurrent((prev) => (prev + 1) % testimonials.length);
           }, AUTO_SCROLL_INTERVAL);
         }
         return () => clearTimeout(timeoutRef.current);
-      }, [current, paused]);
+      }, [current, paused, testimonials]);
+
+      // Fetch testimonials dynamically, filter for 5-star, order latest first.
+      useEffect(() => {
+        let mounted = true;
+        async function fetchTestimonials() {
+          try {
+            const { data, error } = await supabase
+              .from('reviews')
+              .select('*')
+              .eq('rating', 5)
+              .order('created_at', { ascending: false })
+              .limit(20);
+            if (error) throw error;
+            if (!mounted) return;
+            if (Array.isArray(data) && data.length > 0) {
+              setTestimonials(data);
+              setCurrent(0);
+            }
+          } catch (err) {
+            // keep fallback testimonials; do not crash UI
+            console.warn('Failed to fetch testimonials, using fallback', err);
+          }
+        }
+        fetchTestimonials();
+        return () => { mounted = false; };
+      }, []);
+
+      // Ensure current index stays valid when testimonials array size changes
+      useEffect(() => {
+        if (testimonials.length === 0) return;
+        if (current >= testimonials.length) setCurrent(0);
+      }, [testimonials, current]);
 
       return (
         <motion.section
@@ -52,25 +82,53 @@ import React, { useState, useEffect, useRef } from 'react';
                 onMouseEnter={() => setPaused(true)}
                 onMouseLeave={() => setPaused(false)}
                 className="flex flex-col items-center"
-                style={{ minHeight: 340 }}
+                style={{ minHeight: 340, touchAction: 'pan-y', willChange: 'transform' }}
+                // Allow horizontal drag on the single centered card.
+                drag="x"
+                dragConstraints={{ left: 0, right: 0 }}
+                dragElastic={0.15}
+                dragMomentum={false}
+                // lock Y while dragging to avoid vertical jitter from simultaneous y animations
+                whileDrag={{ y: 0 }}
+                onDragStart={() => setPaused(true)}
+                onDragEnd={(event, info) => {
+                  // info.offset.x indicates px dragged. Positive = right swipe (previous), Negative = left swipe (next)
+                  const offsetX = info.offset.x;
+                  // Defer index update to allow the drag release to settle and avoid a visual "jerk" when the
+                  // motion component immediately re-renders with exit/enter y-animations. Using rAF gives
+                  // the browser one frame to settle the pointer release which significantly reduces perceived jank.
+                  if (offsetX > dragThreshold) {
+                    requestAnimationFrame(() => setCurrent((prev) => (prev - 1 + testimonials.length) % testimonials.length));
+                  } else if (offsetX < -dragThreshold) {
+                    requestAnimationFrame(() => setCurrent((prev) => (prev + 1) % testimonials.length));
+                  }
+                  // release pause after drag completes
+                  setPaused(false);
+                }}
               >
-                <Card className="h-full p-8 bg-white/90 shadow-xl border-blue-100 flex flex-col items-center text-center rounded-2xl transition-all duration-500">
+                {/* Rendering the active testimonial card. Kept exact layout and animations. */}
+                <Card className="h-full p-8 bg-white/90 shadow-xl border-blue-100 flex flex-col items-center text-center rounded-2xl transition-all duration-500 pointer-events-auto">
                   <Avatar className="w-20 h-20 mb-4 border-2 border-blue-400 shadow-lg">
-                    <img alt={testimonialsData[current].alt} className="w-full h-full object-cover rounded-full" src={`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(testimonialsData[current].avatarSeed)}`} />
-                    <AvatarFallback>{testimonialsData[current].name.substring(0,1)}{testimonialsData[current].name.includes(' ') ? testimonialsData[current].name.split(' ')[1].substring(0,1) : ''}</AvatarFallback>
+                    {testimonials[current] && testimonials[current].avatar_url ? (
+                      <AvatarImage src={testimonials[current].avatar_url} alt={testimonials[current].alt || testimonials[current].name} />
+                    ) : (
+                      // Fallback to seeded DiceBear avatar using name (keeps avatar stable if data changes)
+                      <img alt={testimonials[current]?.alt} className="w-full h-full object-cover rounded-full" src={`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(testimonials[current]?.avatarSeed || testimonials[current]?.name || 'user')}`} />
+                    )}
+                    <AvatarFallback>{testimonials[current] ? `${testimonials[current].name.substring(0,1)}${testimonials[current].name.includes(' ') ? testimonials[current].name.split(' ')[1].substring(0,1) : ''}` : ''}</AvatarFallback>
                   </Avatar>
-                  <CardTitle className="text-xl mb-2 text-[#1a237e]">{testimonialsData[current].name}</CardTitle>
+                  <CardTitle className="text-xl mb-2 text-[#1a237e]">{testimonials[current]?.name}</CardTitle>
                   <div className="flex justify-center mb-2">
                     {[...Array(5)].map((_, i) => (
                       <span key={i} className="text-yellow-400 text-lg">★</span>
                     ))}
                   </div>
-                  <CardDescription className="text-zinc-600 italic text-lg">"{testimonialsData[current].quote}"</CardDescription>
+                  <CardDescription className="text-zinc-600 italic text-lg">"{testimonials[current]?.quote}"</CardDescription>
                 </Card>
               </motion.div>
               {/* Carousel dots */}
               <div className="flex justify-center gap-2 mt-6">
-                {testimonialsData.map((_, idx) => (
+                {testimonials.map((_, idx) => (
                   <button
                     key={idx}
                     className={`w-3 h-3 rounded-full border-2 border-blue-300 transition-all duration-300 ${current === idx ? 'bg-blue-500 scale-125' : 'bg-blue-100'}`}

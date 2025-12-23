@@ -375,7 +375,7 @@ import React, { useEffect, useState } from 'react';
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -20 }}
           transition={{ duration: 0.3 }}
-          className="container mx-auto px-4 py-8"
+          className="container mx-auto px-4 py-0"
         >
           <h1 className="text-4xl font-bold mb-8 gradient-text">Admin Panel</h1>
           <p className="text-lg text-muted-foreground mb-8">Manage orders and users. Send emails to users directly.</p>

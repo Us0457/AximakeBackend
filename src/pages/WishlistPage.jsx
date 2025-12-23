@@ -18,6 +18,19 @@ const WishlistPage = () => {
   const [wishlist, setWishlist] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // SEO: page title
+  useEffect(() => {
+    document.title = 'Wishlist — Aximake';
+  }, []);
+
+  // SEO: meta description for wishlist
+  useEffect(() => {
+    const desc = 'Your Wishlist at Aximake — saved products and favorites to buy later.';
+    let m = document.querySelector('meta[name="description"]');
+    if (!m) { m = document.createElement('meta'); m.name = 'description'; document.head.appendChild(m); }
+    m.content = desc.slice(0, 160);
+  }, []);
+
   // Fetch wishlist items
   useEffect(() => {
     if (!user) return;
@@ -84,6 +97,7 @@ const WishlistPage = () => {
           featured: product.featured,
           item_type: 'product',
           in_stock: product.in_stock,
+          sku: product.sku || null,
         });
       if (cartError) {
         toast({ title: 'Error', description: cartError.message, variant: 'destructive' });
@@ -109,13 +123,8 @@ const WishlistPage = () => {
   if (loading) return <div className="flex justify-center items-center min-h-[60vh]">Loading...</div>;
 
   return (
-    <div className="container mx-auto py-12 px-2 sm:px-4">
-      <h1 className="text-3xl font-bold mb-8 gradient-text text-center">Your Wishlist</h1>
-      <Card className="w-full max-w-3xl mx-auto">
-        <CardHeader>
-          <CardTitle className="text-2xl font-semibold text-primary flex items-center gap-2"><Heart className="h-6 w-6 text-primary" /> Wishlist</CardTitle>
-        </CardHeader>
-        <CardContent>
+    <div className="container mx-auto py-0 px-2 sm:px-4">
+      <h1 className="text-3xl font-bold mb-8 gradient-text text-center">Your Wishlist</h1>  
           {loading ? (
             <div className="text-center text-muted-foreground py-12">Loading...</div>
           ) : wishlist.length === 0 ? (
@@ -159,6 +168,7 @@ const WishlistPage = () => {
                       <div className="flex flex-col min-w-0">
                         <div className="font-semibold text-lg text-zinc-900 line-clamp-2">{product.name}</div>
                         <div className="text-primary font-bold text-base mt-1">₹{product.price}</div>
+                        {product.sku && <div className="text-xs text-zinc-500 mt-1">SKU: <span className="font-mono text-xs text-zinc-700">{product.sku}</span></div>}
                         {product.category && <div className="text-xs text-zinc-500 mt-1">{product.category}</div>}
                         {product.color && <div className="text-xs text-zinc-500 mt-1">Color: {product.color}</div>}
                       </div>
@@ -206,8 +216,6 @@ const WishlistPage = () => {
               })}
             </div>
           )}
-        </CardContent>
-      </Card>
     </div>
   );
 };

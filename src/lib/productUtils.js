@@ -70,3 +70,10 @@ export function isKitProduct(p) {
   if (p.outcomes && (Array.isArray(p.outcomes) ? p.outcomes.length > 0 : String(p.outcomes).trim() !== '' && String(p.outcomes) !== '[]')) return true;
   return false;
 }
+
+// Split a category string into hierarchical parts.
+// Example: "Kits > Raspberry Pi Kits" -> ["Kits", "Raspberry Pi Kits"]
+export function buildBreadcrumbParts(cat) {
+  if (!cat) return [];
+  return String(cat).split(/\s*[>\/|›-]\s*/).map(s => s.trim()).filter(Boolean);
+}

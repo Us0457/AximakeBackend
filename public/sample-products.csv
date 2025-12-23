@@ -1,3 +1,3 @@
-name,category,price,stock,visible,featured,description,material,weight,dimensions,images
-Sample Product,Category A,499,10,true,false,This is a sample product.,PLA,200g,10x10x10cm,"{products/sample1.jpg}"
-Another Product,Category B,999,5,true,true,Another sample.,ABS,150g,8x8x8cm,"{products/sample2.jpg,products/sample3.jpg}"
+name,sku,category,price,original_price,stock,visible,featured,description,short_description,material,weight,dimensions,difficulty,includes,outcomes,specifications,documentation,faq,images
+Sample Product,SKU00001,Category A,499,599,10,true,false,This is a sample product.,A compact PLA kit,PLA,200,10x10x10cm,Beginner,"Arduino UNO, USB cable","Build LED projects,Learn basics","{\"board\": \"Arduino UNO\", \"voltage\": \"5V\"}",https://example.com/docs,"[{\"q\":\"What is included?\",\"a\":\"See includes column\"}]",products/sample1.jpg
+Another Product,SKU00002,Category B,999,1299,5,true,true,Another sample.,Advanced robotics kit,ABS,150,8x8x8cm,Advanced,"Motor, Controller","Build robot,Learn PID","size: small\npower: 12V",https://example.com/robot-docs,"[{\"q\":\"Is assembly required?\",\"a\":\"Yes\"}]","products/sample2.jpg,products/sample3.jpg"

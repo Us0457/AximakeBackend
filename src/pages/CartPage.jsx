@@ -37,6 +37,51 @@ function getSupabasePublicUrl(file_url) {
   return `https://wruysjrqadlsljnkmnte.supabase.co/storage/v1/object/public/stl-files/${file_url.replace(/^stl-files\//, '')}`;
 }
 
+const fallbackImg = '/assets/fallback-product.png';
+
+// Helper to get main image (copied from WishlistPage for consistent behavior)
+function getMainImage(product) {
+  // If images is an array
+  if (Array.isArray(product.images) && product.images.length > 0) {
+    return cleanImageUrl(product.images[0]);
+  }
+  // If images is a JSON string
+  if (typeof product.images === 'string') {
+    try {
+      const arr = JSON.parse(product.images);
+      if (Array.isArray(arr) && arr.length > 0) return cleanImageUrl(arr[0]);
+    } catch {
+      // Not JSON, could be comma-separated or plain string
+      if (product.images.includes(',')) {
+        return cleanImageUrl(product.images.split(',')[0].trim());
+      }
+      if (product.images.trim() !== '') {
+        return cleanImageUrl(product.images.trim());
+      }
+    }
+  }
+  // If an explicit single image field exists
+  if (product.image) return cleanImageUrl(product.image);
+  return fallbackImg;
+}
+
+function cleanImageUrl(url) {
+  if (!url) return fallbackImg;
+  let img = String(url).replace(/[\[\]\"'{}]/g, '').trim();
+  if (!img) return fallbackImg;
+  // If already absolute URL
+  if (/^https?:\/\//i.test(img)) return img;
+  // If starts with products/ (Supabase Storage)
+  if (img.startsWith('products/')) {
+    return 'https://wruysjrqadlsljnkmnte.supabase.co/storage/v1/object/public/product-images/' + img;
+  }
+  // If starts with /assets/ or /, use as-is
+  if (img.startsWith('/assets/')) return img;
+  if (img.startsWith('/')) return img;
+  // Otherwise, assume it's a filename in /assets/
+  return '/assets/' + img;
+}
+
 const CartPage = () => {
   const { user } = useAuth();
   const [cart, setCart] = useState([]);
@@ -66,13 +111,58 @@ const CartPage = () => {
       // Fetch all product details for cart items, including item_type and all needed fields
       const { data, error } = await supabase
         .from('cart_items')
-        .select('id, quantity, name, price, image, category, description, product_id, item_type, material, images, color, infill, file_url, featured') // removed stock
+        .select('id, quantity, name, price, image, category, description, product_id, item_type, material, images, color, infill, file_url, featured, sku') // include sku
         .eq('user_id', user.id);
       if (!error) setCart(data || []);
       setLoading(false);
     };
     fetchCart();
+    // After fetching cart, also fetch product pricing (original_price/old_price) for UI display
+    // We intentionally do this as a separate read-only request to avoid changing backend logic or data.
+    const enrichPrices = async () => {
+      try {
+        const { data: cartData, error: cartErr } = await supabase
+          .from('cart_items')
+          .select('id, product_id')
+          .eq('user_id', user.id);
+        if (cartErr || !cartData) return;
+        const productIds = Array.from(new Set(cartData.filter(c => c.product_id).map(c => c.product_id)));
+        if (productIds.length === 0) return;
+        const { data: productsData, error: prodErr } = await supabase
+          .from('products')
+          .select('id, original_price')
+          .in('id', productIds);
+        if (prodErr || !productsData) return;
+        const priceMap = {};
+        productsData.forEach(p => { priceMap[p.id] = { original_price: p.original_price }; });
+        // Merge into current cart state (UI-only)
+        setCart(prev => (prev || []).map(ci => {
+          if (!ci.product_id) return ci;
+          const p = priceMap[ci.product_id];
+          if (!p) return ci;
+          // Only add fields for display; do not alter pricing logic
+          return { ...ci, original_price: (ci.original_price ?? p.original_price) };
+        }));
+      } catch (e) {
+        // ignore UI-only enrichment errors
+        // console.debug('Price enrichment failed', e);
+      }
+    };
+    enrichPrices();
   }, [user]);
+
+  // SEO: page title
+  useEffect(() => {
+    document.title = 'Cart — Aximake';
+  }, []);
+
+  // SEO: meta description for cart
+  useEffect(() => {
+    const desc = 'View your cart at Aximake. Review items and proceed to secure checkout.';
+    let m = document.querySelector('meta[name="description"]');
+    if (!m) { m = document.createElement('meta'); m.name = 'description'; document.head.appendChild(m); }
+    m.content = desc.slice(0, 160);
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -281,6 +371,7 @@ const CartPage = () => {
           name: item.product_id ? item.name : displayName,
           quantity: item.quantity || 1,
           price: item.price,
+          sku: item.sku || null,
           product_id: item.product_id || null,
           file_name: fileName || null,
           file_url: item.file_url || null,
@@ -397,47 +488,42 @@ const CartPage = () => {
   const renderProductCard = (item) => {
     // Only render if item is a product (has product_id)
     if (!item.product_id) return null;
-    // Always use only the main image for display
-    let productImage = item.image;
-    if (!productImage && item.images) {
-      if (Array.isArray(item.images)) {
-        productImage = item.images[0];
-      } else if (typeof item.images === 'string' && item.images.includes(',')) {
-        productImage = item.images.split(',')[0].trim();
-      } else if (typeof item.images === 'string' && item.images.trim() !== '') {
-        productImage = item.images.trim();
-      }
-    }
-    if (productImage) {
-      productImage = productImage.replace(/["'{}]/g, '').trim();
-    }
-    if (!productImage) {
-      productImage = 'https://images.unsplash.com/photo-1585592049294-8f466326930a';
-    }
-    // If the image path is not an absolute URL, prepend the Supabase storage URL if needed
-    if (productImage && !/^https?:\/\//i.test(productImage)) {
-      const supabaseBaseUrl = 'https://wruysjrqadlsljnkmnte.supabase.co/storage/v1/object/public/product-images/';
-      if (productImage.startsWith('products/')) {
-        productImage = supabaseBaseUrl + productImage.replace(/^products\//, 'products/');
-      } else if (!productImage.startsWith('/')) {
-        productImage = '/' + productImage;
-      }
-    }
+    // Use the same main-image logic as WishlistPage (handles arrays, JSON, comma lists and bare filenames)
+    const productImage = getMainImage(item);
     return (
       <Card key={item.id} className="relative flex flex-row items-stretch gap-0 p-0 mb-4 shadow-lg border border-blue-100 bg-white/90 hover:shadow-2xl transition-all min-h-[112px] h-32 sm:h-32 overflow-hidden w-full">
-        {/* Product Image - left, fills height and width */}
-        <div className="w-28 h-full flex-shrink-0 flex items-stretch justify-center bg-zinc-50 p-0">
+        {/* Product Image - left, fills height and width (clickable to PDP) */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => navigate(`/product/${item.product_id}`)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(`/product/${item.product_id}`); }}
+          className="w-28 h-full flex-shrink-0 flex items-stretch justify-center bg-zinc-50 p-0 cursor-pointer"
+        >
           <img
             src={productImage}
             alt={item.name}
             className="w-full h-full object-cover rounded-none"
             style={{ minHeight: '100%', minWidth: '100%', objectFit: 'cover' }}
+            onError={e => { e.target.onerror = null; e.target.src = fallbackImg; }}
           />
         </div>
         {/* Product Details and Actions */}
         <div className="flex flex-1 flex-col justify-between p-3 min-w-0">
           <div className="flex flex-col min-w-0">
-            <span className="text-base font-bold text-indigo-800 truncate line-clamp-1">{item.name}</span>
+            <span
+              onClick={() => navigate(`/product/${item.product_id}`)}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigate(`/product/${item.product_id}`); }}
+              role="button"
+              tabIndex={0}
+              className="text-base font-bold text-indigo-800 truncate line-clamp-1 cursor-pointer"
+            >
+              {item.name}
+            </span>
+            {/* SKU (show only if present) */}
+            {item.sku && (
+              <span className="text-xs text-zinc-500 mt-0.5">SKU: <span className="font-mono text-xs text-zinc-700">{item.sku}</span></span>
+            )}
             {item.description && (
               <span className="text-xs text-zinc-700 line-clamp-1 mb-1">
                 {item.description.split(' ').slice(0, 10).join(' ')}{item.description.split(' ').length > 10 ? '…' : ''}
@@ -445,7 +531,22 @@ const CartPage = () => {
             )}
           </div>
           <div className="flex items-end justify-between gap-2 mt-2">
-            <span className="text-base font-bold text-primary">₹{Number(item.price).toLocaleString()}</span>
+            {/* Pricing: show original (MRP) if available and greater than selling price */}
+            <div className="flex items-baseline gap-2">
+              {(() => {
+                const priceNum = Number(item.price) || 0;
+                const mrpNum = Number(item.original_price ?? item.old_price) || 0;
+                const showMRP = mrpNum > 0 && mrpNum > priceNum;
+                return (
+                  <>
+                    {showMRP && (
+                      <div className="text-sm line-through text-gray-500">₹{mrpNum.toLocaleString('en-IN')}</div>
+                    )}
+                    <div className="text-base font-bold text-primary">₹{Number(item.price).toLocaleString('en-IN')}</div>
+                  </>
+                );
+              })()}
+            </div>
             {/* Desktop: Quantity selector and delete icon on right */}
             <div className="hidden md:flex items-center gap-2 ml-auto">
               <div className="flex items-center gap-2">
@@ -553,7 +654,7 @@ const CartPage = () => {
   };
 
   return (
-    <div className="w-full md:mx-auto md:px-4 py-8 max-w-6xl">
+    <div className="w-full md:mx-auto md:px-4 pt-0 pb-8 max-w-6xl">
       <h1 className="text-3xl font-bold mb-6 gradient-text">Your Cart</h1>
       <UICard className="mb-6 py-2 px-0 md:px-4 rounded-xl shadow border border-primary/10 bg-white flex flex-col justify-center min-h-0 h-auto w-full overflow-hidden">
         <CardHeader className="flex flex-row flex-wrap items-center justify-between py-2 px-2 md:px-0 gap-y-2">
@@ -754,14 +855,7 @@ const CartPage = () => {
               {sending ? 'Sending...' : 'Proceed to Payment'}
             </Button>
           </Card>
-          <Card className="p-3 md:p-6 w-full md:w-80">
-            <h2 className="text-xl font-semibold mb-4">Payment Options</h2>
-            <div className="flex flex-col gap-4">
-              <Button variant="outline" className="w-full">Pay with Credit/Debit Card</Button>
-              <Button variant="outline" className="w-full">Pay with UPI</Button>
-              <Button variant="outline" className="w-full">Pay with Net Banking</Button>
-            </div>
-          </Card>
+          {/* Payment options temporarily removed */}
         </div>
       </div>
     </div>

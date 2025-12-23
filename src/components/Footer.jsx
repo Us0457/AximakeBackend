@@ -1,56 +1,114 @@
 import React from 'react';
-    import { Link } from 'react-router-dom';
-    import { Printer, Facebook, Twitter, Instagram } from 'lucide-react';
-import { FaFacebook, FaWhatsapp } from 'react-icons/fa';
+import { Link } from 'react-router-dom';
+import { Headphones, Phone, Facebook, Twitter, Instagram } from 'lucide-react';
+import { FaWhatsapp } from 'react-icons/fa';
 
-    const Footer = () => {
-      const currentYear = new Date().getFullYear();
-      return (
-        <footer className="bg-muted/50 border-t border-border/40 py-12 text-muted-foreground">
-          <div className="container mx-auto px-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
+const Footer = () => {
+  const currentYear = new Date().getFullYear();
+  return (
+    <footer className="w-full">
+      {/* Live Support Strip */}
+      <div className="w-full bg-gradient-to-r from-sky-50 to-slate-100">
+        <div className="container mx-auto px-4 py-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <Headphones className="w-6 h-6 text-sky-700" />
               <div>
-                <Link to="/" className="flex items-center space-x-2 mb-4">
-                
-                  <span className="text-xl font-bold text-foreground">Aximake</span>
-                </Link>
-                <p className="text-sm">
-                  Your partner for high-quality 3D printing services. From prototypes to end-use parts, we bring your ideas to life.
-                </p>
-              </div>
-              <div>
-                <p className="font-semibold text-foreground mb-3">Quick Links</p>
-                <ul className="space-y-2 text-sm">
-                  <li><Link to="/products" className="hover:text-primary transition-colors">Products</Link></li>
-                  <li><Link to="/custom-print" className="hover:text-primary transition-colors">Custom Prints</Link></li>
-                  <li><Link to="/pricing-calculator" className="hover:text-primary transition-colors">Pricing</Link></li>
-                  <li><Link to="/blog" className="hover:text-primary transition-colors">Blog</Link></li>
-                  <li><Link to="/privacy-policy" className="hover:text-primary transition-colors">Privacy Policy</Link></li>
-                  <li><Link to="/terms-and-conditions" className="hover:text-primary transition-colors">Terms & Conditions</Link></li>
-                </ul>
-              </div>
-              <div>
-                <p className="font-semibold text-foreground mb-3">Connect With Us</p>
-                <div className="flex space-x-4">
-                  <a href="#" aria-label="WhatsApp" className="hover:text-green-600 transition-colors"><FaWhatsapp size={20} /></a>
-                  <a href="#" aria-label="Facebook" className="hover:text-blue-700 transition-colors"><FaFacebook size={20} /></a>
-                  <a href="#" aria-label="Twitter" className="hover:text-sky-600 transition-colors"><Twitter size={20} /></a>
-                  <a href="#" aria-label="Instagram" className="hover:text-pink-600 transition-colors"><Instagram size={20} /></a>
-                </div>
-                <p className="text-sm mt-4">
-                  Whitefield, Bangalore 560067
-                </p>
-                <p className="text-sm">
-                  contact@aximake.in
-                </p>
+                <div className="text-sm md:text-base font-medium text-slate-900">Got questions? We're here to help</div>
+                <div className="text-xs text-slate-600">Talk to a real expert</div>
               </div>
             </div>
-            <div className="border-t border-border/40 pt-8 text-center text-sm">
-              <p>&copy; {currentYear} Aximake. All rights reserved.</p>
+            <div className="flex items-center gap-3">
+              <Phone className="w-5 h-5 text-slate-700" />
+              <a href="tel:+916206676009" className="text-sm md:text-base font-semibold text-slate-900">+91 6206676009</a>
             </div>
           </div>
-        </footer>
-      );
-    };
+        </div>
+      </div>
 
-    export default Footer;
+      {/* Main Footer Grid */}
+      <div className="bg-gradient-to-b from-white/95 to-neutral-200/95 border-t border-slate-200">
+        <div className="container mx-auto px-4 py-10 md:py-12">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+            {/* Column 1 - Brand */}
+            <div>
+                <Link to="/" className="flex items-center space-x-3 mb-3">
+                  {/* Compact footer logo: visually lighter and smaller than navbar. */}
+                  <img src="/assets/BrandLogo.png" alt="Aximake" className="h-6 w-auto object-contain opacity-90" />
+                  <span className="sr-only">Aximake</span>
+                </Link>
+              <p className="text-sm text-slate-700">Your partner for electronics, DIY kits, and 3D printing — from prototypes to production.</p>
+              <div className="text-sm text-slate-700 mt-3">
+                <div>Whitefield, Bangalore 560067</div>
+                <div className="mt-1">contact@aximake.com</div>
+              </div>
+            </div>
+
+            {/* Column 2 - My Account */}
+            <div>
+              <h4 className="text-sm font-semibold text-slate-900 mb-3 hidden md:block">My Account</h4>
+              <details className="md:hidden"> 
+                <summary className="text-sm font-semibold text-slate-900 mb-2">My Account</summary>
+                <div className="mt-2" />
+              </details>
+              <ul className="space-y-2 text-sm text-slate-700">
+                <li><Link to="/dashboard" className="hover:text-slate-900 transition">Dashboard</Link></li>
+                <li><Link to="/orders" className="hover:text-slate-900 transition">Orders</Link></li>
+                <li><Link to="/payments" className="hover:text-slate-900 transition">Payments &amp; Cards</Link></li>
+                <li><Link to="/cart" className="hover:text-slate-900 transition">Cart</Link></li>
+                <li><Link to="/wishlist" className="hover:text-slate-900 transition">Wishlist</Link></li>
+              </ul>
+            </div>
+
+            {/* Column 3 - Services */}
+            <div>
+              <h4 className="text-sm font-semibold text-slate-900 mb-3 hidden md:block">Services</h4>
+              <details className="md:hidden">
+                <summary className="text-sm font-semibold text-slate-900 mb-2">Services</summary>
+                <div className="mt-2" />
+              </details>
+              <ul className="space-y-2 text-sm text-slate-700">
+                <li><Link to="/3d-printing" className="hover:text-slate-900 transition font-medium">3D Printing Service</Link></li>
+                <li><Link to="/custom-print" className="hover:text-slate-900 transition font-medium">Custom Prints</Link></li>
+                <li><Link to="/ecad-upload" className="hover:text-slate-900 transition font-medium">ECAD Upload Tool</Link></li>
+                <li><Link to="/about" className="hover:text-slate-900 transition">About Us</Link></li>
+              </ul>
+            </div>
+
+            {/* Column 4 - Policies & Help + Social */}
+            <div>
+              <h4 className="text-sm font-semibold text-slate-900 mb-3 hidden md:block">Policies &amp; Help</h4>
+              <details className="md:hidden">
+                <summary className="text-sm font-semibold text-slate-900 mb-2">Policies &amp; Help</summary>
+                <div className="mt-2" />
+              </details>
+              <ul className="space-y-2 text-sm text-slate-700 mb-4">
+                <li><Link to="/terms-and-conditions" className="hover:text-slate-900 transition">Terms &amp; Conditions</Link></li>
+                <li><Link to="/privacy-policy" className="hover:text-slate-900 transition">Privacy Policy</Link></li>
+                <li><Link to="/shipping-policy" className="hover:text-slate-900 transition">Shipping Policy</Link></li>
+                <li><Link to="/refunds" className="hover:text-slate-900 transition">Refund &amp; Returns</Link></li>
+                <li><Link to="/faq" className="hover:text-slate-900 transition">FAQs</Link></li>
+              </ul>
+
+              <div className="flex items-center gap-4">
+                <a href="#" aria-label="WhatsApp" className="text-slate-800 hover:text-green-600 transition-transform transform hover:scale-105"><FaWhatsapp className="w-5 h-5" /></a>
+                <a href="#" aria-label="Facebook" className="text-slate-800 hover:text-blue-700 transition-transform transform hover:scale-105"><Facebook className="w-5 h-5" /></a>
+                <a href="#" aria-label="Twitter" className="text-slate-800 hover:text-sky-600 transition-transform transform hover:scale-105"><Twitter className="w-5 h-5" /></a>
+                <a href="#" aria-label="Instagram" className="text-slate-800 hover:text-pink-600 transition-transform transform hover:scale-105"><Instagram className="w-5 h-5" /></a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom dark bar */}
+      <div className="w-full bg-slate-900 text-white">
+        <div className="container mx-auto px-4 py-3 text-center text-sm">
+          <div>&copy; {currentYear} Aximake. All rights reserved. <span className="hidden sm:inline">• Made in India 🇮🇳</span></div>
+        </div>
+      </div>
+    </footer>
+  );
+};
+
+export default Footer;

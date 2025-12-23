@@ -1,7 +1,11 @@
 <?php
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
+// In development we may want to log errors, but do not send deprecation/notice output
+// directly to the client (prevents "headers already sent" problems).
+ini_set('display_errors', 0);
+ini_set('display_startup_errors', 0);
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE & ~E_USER_DEPRECATED);
+// Buffer output so headers can still be set even if libraries emit warnings
+ob_start();
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
@@ -11,6 +15,32 @@ require __DIR__ . '/../vendor/autoload.php';
 if (!defined('DOMPDF_ENABLE_AUTOLOAD')) {
     define('DOMPDF_ENABLE_AUTOLOAD', false);
 }
+
+// Load project .env into environment variables if present (simple parser)
+$envPath = dirname(__DIR__) . '/.env';
+if (file_exists($envPath)) {
+    $lines = file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '' || strpos($line, '#') === 0) continue;
+        if (strpos($line, '=') === false) continue;
+        list($k, $v) = explode('=', $line, 2);
+        $k = trim($k);
+        $v = trim($v);
+        if (strlen($v) >= 2 && (($v[0] === '"' && $v[-1] === '"') || ($v[0] === "'" && $v[-1] === "'"))) {
+            $v = substr($v, 1, -1);
+        }
+        putenv("$k=$v");
+        $_ENV[$k] = $v;
+    }
+}
+
+// Simple error handler to capture warnings/notices into log file instead of sending to client
+set_error_handler(function($errno, $errstr, $errfile, $errline){
+    $msg = date('Y-m-d H:i:s') . " - PHP Notice/Warning: [$errno] $errstr in $errfile:$errline" . PHP_EOL;
+    file_put_contents(__DIR__ . '/php-warnings.log', $msg, FILE_APPEND);
+    return true; // prevent PHP internal handler from outputting to client
+});
 
 // Log script access
 file_put_contents(__DIR__ . '/debug-post.log', date('Y-m-d H:i:s') . " - Script hit\n", FILE_APPEND);
@@ -44,18 +74,32 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
     $mail = new PHPMailer(true);
     try {
+        // Basic sanity check: ensure SMTP host/user look consistent to avoid repeated auth failures
+        $smtpHostCheck = getenv('SMTP_HOST') ?: 'smtp.hostinger.com';
+        $smtpUserCheck = getenv('SMTP_USER') ?: 'admin@aximake.in';
+        if (stripos($smtpHostCheck, 'hostinger') !== false && stripos($smtpUserCheck, '@gmail.com') !== false) {
+            $msg = date('Y-m-d H:i:s') . " - SMTP config mismatch: host={$smtpHostCheck} user={$smtpUserCheck}" . PHP_EOL;
+            file_put_contents(__DIR__ . '/email-error.log', $msg, FILE_APPEND);
+            http_response_code(500);
+            echo 'SMTP configuration mismatch: please set SMTP_HOST/SMTP_USER/SMTP_PASS in the project .env or environment variables.';
+            if (ob_get_level()) ob_end_flush();
+            exit;
+        }
+
         $mail->isSMTP();
-        $mail->SMTPDebug = 2;
+        // Log SMTP debug to file instead of stdout
+        $mail->SMTPDebug = 0;
         $mail->Debugoutput = function($str, $level) {
-            file_put_contents(__DIR__ . '/smtp-debug.log', $str . PHP_EOL, FILE_APPEND);
+            file_put_contents(__DIR__ . '/smtp-debug.log', date('Y-m-d H:i:s') . ' - ' . $str . PHP_EOL, FILE_APPEND);
         };
-        $mail->Host       = 'smtp.hostinger.com';
-        $mail->SMTPAuth   = true;
-        $mail->Username   = 'admin@aximake.in';
-        $mail->Password   = 'Utka2307Sri';
-        $mail->SMTPSecure = 'ssl';
-        $mail->Port       = 465;
-        $mail->setFrom('admin@aximake.in', 'Aximake 3D Printing');
+        // Prefer environment variables for SMTP settings; fall back to hardcoded values
+        $mail->Host = getenv('SMTP_HOST') ?: 'smtp.hostinger.com';
+        $mail->SMTPAuth = true;
+        $mail->Username = getenv('SMTP_USER') ?: 'admin@aximake.in';
+        $mail->Password = getenv('SMTP_PASS') ?: 'Utka2307Sri';
+        $mail->SMTPSecure = getenv('SMTP_SECURE') ?: 'ssl';
+        $mail->Port = getenv('SMTP_PORT') ? intval(getenv('SMTP_PORT')) : 465;
+        $mail->setFrom(getenv('SMTP_FROM') ?: 'admin@aximake.in', getenv('SMTP_FROM_NAME') ?: 'Aximake 3D Printing');
         $mail->addAddress($to, $name);
         $mail->isHTML(true);
 
@@ -291,11 +335,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
     } catch (Exception $e) {
         http_response_code(500);
-        $errorMsg = "Mailer Error: {$mail->ErrorInfo}";
-        echo $errorMsg;
-        file_put_contents(__DIR__ . '/email-error.log', date('Y-m-d H:i:s') . ' - ' . $mail->ErrorInfo . PHP_EOL, FILE_APPEND);
+        $err = $e->getMessage();
+        echo 'Mailer Exception: ' . $err;
+        file_put_contents(__DIR__ . '/email-error.log', date('Y-m-d H:i:s') . ' - Exception: ' . $err . PHP_EOL, FILE_APPEND);
     }
 } else {
     http_response_code(405);
     echo "Method Not Allowed";
 }
+
+// Flush any buffered output after headers have been sent
+if (ob_get_level()) ob_end_flush();

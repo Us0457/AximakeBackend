@@ -37,6 +37,16 @@ import React, { useState, useEffect, useRef } from 'react';
       const [profileFirstName, setProfileFirstName] = useState('');
       const [profileRole, setProfileRole] = useState(null);
       const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+      const [mobileAllOpen, setMobileAllOpen] = useState(false);
+      const [isAllProductsOpen, setIsAllProductsOpen] = useState(false);
+      const allMenuRef = useRef(null);
+      const allCloseTimeoutRef = useRef(null);
+      // Gradient & accent styles for All Products button
+      const defaultGradient = 'linear-gradient(90deg, #031428 0%, #254f6b 100%)';
+      const hoverGradient = 'linear-gradient(90deg, #0b2a47 0%, #2a6580 100%)';
+      const mobileSubtle = 'linear-gradient(90deg, rgba(11,42,71,0.06) 0%, rgba(47,182,172,0.03) 100%)';
+      const accentColor = '#2fb6ac';
+      const allBtnBase = 'px-3 py-2 rounded-md text-sm font-semibold text-white transition duration-200 ease-in-out';
       const [search, setSearch] = useState('');
       const [suggestions, setSuggestions] = useState([]);
       const [showSuggestions, setShowSuggestions] = useState(false);
@@ -89,23 +99,25 @@ import React, { useState, useEffect, useRef } from 'react';
       useEffect(() => {
         if (!user) return;
         const fetchCartCount = async () => {
-          const { count, error } = await supabase
+          const { data, error } = await supabase
             .from('cart_items')
-            .select('id', { count: 'exact' }) // removed head: true
+            .select('quantity')
             .eq('user_id', user.id);
-          if (!error && typeof count === 'number') {
-            setCartCount(count);
+          if (!error && Array.isArray(data)) {
+            const sum = data.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
+            setCartCount(sum);
           }
         };
         fetchCartCount();
         // Listen for cart changes in this tab
         const updateCartCount = async () => {
-          const { count, error } = await supabase
+          const { data, error } = await supabase
             .from('cart_items')
-            .select('id', { count: 'exact' }) // removed head: true
+            .select('quantity')
             .eq('user_id', user.id);
-          if (!error && typeof count === 'number') {
-            setCartCount(count);
+          if (!error && Array.isArray(data)) {
+            const sum = data.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
+            setCartCount(sum);
           }
         };
         window.addEventListener('cart-updated', updateCartCount);
@@ -394,7 +406,13 @@ import React, { useState, useEffect, useRef } from 'react';
 
       // Remove scroll-to-top on mobile search open
       const handleMobileSearchOpen = (e) => {
-        e.preventDefault();
+        // Debug: log invocation so we can verify clicks reach this handler in tablet tests
+        try {
+          // eslint-disable-next-line no-console
+          console.debug('handleMobileSearchOpen called', { type: e?.type, innerWidth: typeof window !== 'undefined' ? window.innerWidth : null });
+        } catch (err) {}
+        // Accept optional event; keep behavior identical to mobile button.
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
         // Prevent scroll-to-top hack: do not focus or open overlay if a scroll is in progress
         setMobileSearchOpen(true);
         setTimeout(() => {
@@ -424,7 +442,7 @@ import React, { useState, useEffect, useRef } from 'react';
           <div className="container mx-auto flex h-20 items-center justify-between px-4 relative">
             {/* Brand/Logo section */}
             <button
-              className="flex items-center space-x-2 focus:outline-none"
+              className="flex items-center focus:outline-none"
               onClick={e => {
                 e.preventDefault();
                 if (window.location.pathname === '/') {
@@ -436,19 +454,50 @@ import React, { useState, useEffect, useRef } from 'react';
               aria-label="Go to homepage"
               style={{ background: 'none', border: 'none', padding: 0, margin: 0, cursor: 'pointer' }}
             >
-              <img src={logo} alt="Aximake Logo" className="h-8 w-auto" />
-              <span className="text-2xl font-bold gradient-text">Aximake</span>
+              {/* Use uploaded BrandLogo.png from public/assets. */}
+              {/* Sizing controlled via responsive max-height classes so navbar height is preserved. */}
+              <img src="/assets/BrandLogo.png" alt="Aximake" className="h-10 md:h-11 lg:h-12 w-auto object-contain" />
+              {/* Keep accessible name for screen readers without adding visual text that could change layout */}
+              <span className="sr-only">Aximake</span>
             </button>
-            <div className="flex-1 flex items-center justify-end md:justify-end">
-              {/* Nav links section (from Navbar) */}
-              <div className="hidden md:flex flex-1 justify-end">
-                <Navbar />
+            <div className="flex-1 flex items-center w-full min-w-0">
+              {/* LEFT: All Products + small buffer */}
+              <div className="flex items-center gap-6 flex-none">
+                <div className="hidden md:block relative ml-6 mr-6" ref={allMenuRef} onMouseEnter={() => { if (allCloseTimeoutRef.current) { clearTimeout(allCloseTimeoutRef.current); allCloseTimeoutRef.current = null; } setIsAllProductsOpen(true); }} onMouseLeave={() => { if (allCloseTimeoutRef.current) clearTimeout(allCloseTimeoutRef.current); allCloseTimeoutRef.current = setTimeout(() => { setIsAllProductsOpen(false); allCloseTimeoutRef.current = null; }, 150); }}>
+                  <DropdownMenu open={isAllProductsOpen} onOpenChange={setIsAllProductsOpen}>
+                    <DropdownMenuTrigger asChild>
+                      <button className={`${allBtnBase}`} aria-label="All Products" style={{ background: isAllProductsOpen ? hoverGradient : defaultGradient, boxShadow: isAllProductsOpen ? `0 6px 18px rgba(43,100,120,0.12), 0 0 0 4px ${accentColor}22` : undefined, border: isAllProductsOpen ? `1px solid ${accentColor}33` : '1px solid transparent' }}>All Products</button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-64 p-2 z-50" style={{ pointerEvents: 'auto' }}>
+                      <DropdownMenuItem asChild>
+                        <Link to="/products" className="block px-2 py-1 rounded hover:bg-primary/5">All Products</Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <div className="grid grid-cols-1 gap-1 max-h-64 overflow-auto">
+                        {allCategories.map(cat => (
+                          <DropdownMenuItem key={cat} asChild>
+                            <Link to={`/products?category=${encodeURIComponent(cat)}`} className="block px-2 py-1 rounded hover:bg-primary/5">{cat}</Link>
+                          </DropdownMenuItem>
+                        ))}
+                      </div>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               </div>
-              {/* Responsive Search Bar */}
-              <div className="flex-1 flex justify-center items-center">
+
+              {/* CENTER: Navbar - centered, no wrap */}
+              <div className="flex-1 flex justify-start min-w-0 px-4">
+                <div className="hidden md:flex items-center whitespace-nowrap overflow-hidden min-w-0">
+                  <Navbar />
+                </div>
+              </div>
+
+              {/* RIGHT (within header): Search - placed near actions cluster */}
+              {/* Full search input only shown on xl and up; on md/lg we show icon near avatar */}
+              <div className="flex-none ml-4 hidden xl:flex items-center">
                 {/* Desktop search - render nothing at all if mobile search is open */}
                 {!mobileSearchOpen && (
-                  <div className="hidden md:flex relative w-full max-w-[16rem] mx-2">
+                  <div className="relative w-[16rem] max-w-[20rem]">
                     <input
                       type="text"
                       className="w-full rounded border border-border px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary transition-all placeholder:opacity-0"
@@ -461,33 +510,14 @@ import React, { useState, useEffect, useRef } from 'react';
                       aria-label="Search products"
                       style={{ position: 'relative', zIndex: 2, background: 'transparent' }}
                     />
-                    {/* Animated inline text overlay */}
                     {showAnimated && !search && (
-                      <span
-                        className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none select-none transition-all animate-slide-up-text"
-                        style={{ zIndex: 1 }}
-                        aria-hidden="true"
-                      >
-                        {categorySuggestions[animatedIndex]}
-                      </span>
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none select-none transition-all animate-slide-up-text" style={{ zIndex: 1 }} aria-hidden="true">{categorySuggestions[animatedIndex]}</span>
                     )}
-                    <button
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-primary"
-                      onClick={() => search.trim() && handleSearch(search.trim())}
-                      tabIndex={-1}
-                      aria-label="Submit search"
-                    >
-                      <Search className="h-5 w-5" />
-                    </button>
-                    {/* Only show suggestions if not in mobile search mode, on desktop, and window width is md+ */}
+                    <button className="absolute right-2 top-1/2 -translate-y-1/2 text-primary" onClick={() => search.trim() && handleSearch(search.trim())} tabIndex={-1} aria-label="Submit search"><Search className="h-5 w-5" /></button>
                     {showSuggestions && suggestions.length > 0 && window.innerWidth >= 768 && (
                       <ul className="absolute left-0 right-0 top-full bg-background border border-border rounded shadow z-30 mt-1">
                         {suggestions.map(s => (
-                          <li
-                            key={s.label + s.type}
-                            className={`px-3 py-2 cursor-pointer hover:bg-primary/10 flex items-center gap-2 ${s.type === 'category' ? 'font-semibold text-indigo-700' : ''}`}
-                            onMouseDown={() => handleSearch(s.label)}
-                          >
+                          <li key={s.label + s.type} className={`px-3 py-2 cursor-pointer hover:bg-primary/10 flex items-center gap-2 ${s.type === 'category' ? 'font-semibold text-indigo-700' : ''}`} onMouseDown={() => handleSearch(s.label)}>
                             {s.type === 'category' && <span className="inline-block w-2 h-2 rounded-full bg-indigo-400" />}
                             {s.label}
                             {s.type === 'category' && <span className="ml-1 text-xs text-indigo-400">(Category)</span>}
@@ -497,29 +527,29 @@ import React, { useState, useEffect, useRef } from 'react';
                     )}
                   </div>
                 )}
-                {/* Mobile search */}
-                <div className="flex md:hidden items-center w-full justify-end pr-2">
-                  {!mobileSearchOpen && (
-                    <button
-                      type="button"
-                      className="p-2 rounded focus:outline-none focus:ring-2 focus:ring-primary ml-auto"
-                      aria-label="Open search"
-                      onClick={handleMobileSearchOpen}
-                    >
-                      <Search className="h-6 w-6 text-primary" />
-                    </button>
-                  )}
-                  {/* Do NOT render the inline mobile input and dropdown when mobileSearchOpen is true */}
-                </div>
+              </div>
+              {/* Mobile search stays separately (rightmost) */}
+              <div className="flex md:hidden items-center w-full justify-end pr-2">
+                {!mobileSearchOpen && (
+                  <button type="button" className="p-2 rounded focus:outline-none focus:ring-2 focus:ring-primary ml-auto" aria-label="Open search" onClick={handleMobileSearchOpen}><Search className="h-6 w-6 text-primary" /></button>
+                )}
               </div>
             </div>
             {/* Actions section */}
-            <div className="flex items-center space-x-2 sm:space-x-2">
-              <Button asChild className="hidden sm:inline-flex">
-                <Link to="/custom-print">Get a Quote</Link>
-              </Button>
+            <div className="flex items-center space-x-2 sm:space-x-3 ml-6">
+              {/* Removed 'Get a Quote' primary action per design spec */}
               {user ? (
                 <div className="flex items-center gap-2">
+                  {/* Search icon for tablet and smaller-desktop (md/lg). Full bar appears on xl+. */}
+                  <button
+                    type="button"
+                    className="hidden md:inline-flex xl:hidden ml-2 mr-2 z-50 relative p-2 rounded focus:outline-none focus:ring-2 focus:ring-primary pointer-events-auto"
+                    onClick={handleMobileSearchOpen}
+                    onMouseDown={(e) => { if (e && typeof e.preventDefault === 'function') e.preventDefault(); handleMobileSearchOpen(e); }}
+                    aria-label="Open search"
+                  >
+                    <Search className="h-5 w-5 text-primary" />
+                  </button>
                   <DropdownMenu open={isDropdownOpen} onOpenChange={setIsDropdownOpen}>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" size="icon" className="rounded-full">
@@ -531,7 +561,7 @@ import React, { useState, useEffect, useRef } from 'react';
                         </Avatar>
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent ref={dropdownMenuRef} align="end" className="w-56">
+                    <DropdownMenuContent ref={dropdownMenuRef} align="end" className="w-56 z-50">
                       <DropdownMenuLabel className="flex items-center gap-2">
                         <Avatar className="h-8 w-8">
                           <AvatarImage src={profileAvatarUrl || user.user_metadata?.avatar_url} alt={profileFirstName || user.user_metadata?.name || user.email} className="object-cover object-center" />
@@ -610,7 +640,7 @@ import React, { useState, useEffect, useRef } from 'react';
                   <Button variant="ghost" size="icon" onClick={() => navigate('/cart')} aria-label="Cart" className="relative">
                     <ShoppingCart className="h-6 w-6 text-primary hover:text-white transition-colors" />
                     {cartCount > 0 && (
-                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 min-w-[1.25rem] text-center font-bold border border-white">
+                      <span className="absolute -top-1 -right-1 bg-primary text-white text-xs rounded-full px-1.5 py-0.5 min-w-[1.25rem] text-center font-bold border border-white">
                         {cartCount}
                       </span>
                     )}
@@ -621,6 +651,16 @@ import React, { useState, useEffect, useRef } from 'react';
                   <Button variant="outline" asChild className="hidden md:inline-flex">
                     <Link to="/auth?mode=login">Login</Link>
                   </Button>
+                  {/* Show search icon for logged-out users on md/lg as well */}
+                  <button
+                    type="button"
+                    className="hidden md:inline-flex xl:hidden ml-2 mr-2 z-50 relative p-2 rounded focus:outline-none focus:ring-2 focus:ring-primary pointer-events-auto"
+                    onClick={handleMobileSearchOpen}
+                    onMouseDown={(e) => { if (e && typeof e.preventDefault === 'function') e.preventDefault(); handleMobileSearchOpen(e); }}
+                    aria-label="Open search"
+                  >
+                    <Search className="h-5 w-5 text-primary" />
+                  </button>
                   <Button variant="ghost" size="icon" asChild className="md:hidden focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2">
                     <Link
                       to="/auth?mode=login"
@@ -663,7 +703,30 @@ import React, { useState, useEffect, useRef } from 'react';
                 transition={{ duration: 0.3, ease: "easeInOut" }}
                 className="absolute top-20 left-0 w-full bg-background/95 backdrop-blur md:hidden shadow-lg py-4 border-t border-border/40 z-50"
               >
-                <nav className="flex flex-col items-center space-y-3">
+                <nav className="flex flex-col items-center space-y-3 px-4">
+                  {/* Mobile All Products expandable section */}
+                  <div className="w-full">
+                    <button
+                      className="w-full text-left py-3 px-3 rounded-md font-semibold text-base transition-colors"
+                      onClick={() => setMobileAllOpen(v => !v)}
+                      aria-expanded={mobileAllOpen}
+                      style={{
+                        background: mobileAllOpen ? mobileSubtle : 'transparent',
+                        color: '#0b3b58'
+                      }}
+                    >
+                      <span className="inline-block mr-2 w-2 h-2 rounded-full" style={{ background: accentColor, opacity: 0.85 }} />
+                      All Products
+                    </button>
+                    {mobileAllOpen && (
+                      <div className="mt-1 mb-2 space-y-1 pl-3">
+                        <button onClick={(e) => { e.preventDefault(); setIsMobileMenuOpen(false); setMobileAllOpen(false); navigate('/products'); }} className="block w-full text-left px-3 py-2 rounded hover:bg-primary/5">All Products</button>
+                        {allCategories.map(cat => (
+                          <button key={cat} onClick={(e) => { e.preventDefault(); setIsMobileMenuOpen(false); setMobileAllOpen(false); navigate(`/products?category=${encodeURIComponent(cat)}`); }} className="block w-full text-left px-3 py-2 rounded hover:bg-primary/5">{cat}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   {navItemsForMobile.map((item) => {
                     const isActive = activeNavMobile === item.name;
                     return (
@@ -685,16 +748,14 @@ import React, { useState, useEffect, useRef } from 'react';
                       <Link to="/auth?mode=login">Login / Signup</Link>
                     </Button>
                   )}
-                  <Button asChild className="w-11/12 sm:hidden" onClick={toggleMobileMenu}>
-                    <Link to="/custom-print">Get a Quote</Link>
-                  </Button>
+                  {/* Removed mobile 'Get a Quote' link */}
                 </nav>
               </motion.div>
             )}
           </AnimatePresence>
           {/* Mobile search overlay */}
-          {mobileSearchOpen && (
-            <div ref={mobileSearchContainerRef} className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 md:hidden" style={{ minHeight: '100vh' }}>
+            {mobileSearchOpen && (
+              <div ref={mobileSearchContainerRef} className="fixed inset-0 z-[9999] flex items-start justify-center bg-black/30 xl:hidden" style={{ minHeight: '100vh' }}>
               <div className="w-full max-w-full bg-white p-3 pt-6 shadow-lg rounded-none relative flex flex-col items-center">
                 <div className="w-full flex items-center relative">
                   <input

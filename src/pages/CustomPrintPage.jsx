@@ -178,6 +178,8 @@ import React, { useState, useEffect, useRef } from 'react';
           toast({ title: 'Cart Error', description: insertError.message, variant: 'destructive' });
           return;
         }
+        // Notify header and other listeners to update cart totals immediately
+        window.dispatchEvent(new Event('cart-updated'));
         toast({ title: 'Added to Cart!', description: 'Your item has been added to the cart.' });
         navigate('/cart');
       };

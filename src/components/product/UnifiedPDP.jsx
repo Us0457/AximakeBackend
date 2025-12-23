@@ -4,9 +4,11 @@ import { supabase } from '@/lib/supabaseClient';
 import { Button } from '@/components/ui/button';
 import ProductReviews from '@/components/product/ProductReviews';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getImages, isKitProduct } from '@/lib/productUtils';
+import { getImages, isKitProduct, buildBreadcrumbParts } from '@/lib/productUtils';
+import { Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/ui/use-toast';
+import { useRef } from 'react';
 
 const fallbackImg = '/assets/fallback-product.png';
 
@@ -31,13 +33,49 @@ export default function UnifiedPDP({ productId }) {
     if (productId) fetchProduct();
   }, [productId]);
 
+  // SEO: set product page title when product loads
+  useEffect(() => {
+    if (!product) return;
+    const title = product.sku ? `${product.name} — ${product.sku} — Aximake` : `${product.name} — Aximake`;
+    document.title = title;
+  }, [product]);
+
+  // SEO: meta description for product page (name, primary benefit, SKU)
+  useEffect(() => {
+    if (!product) return;
+    const primary = (product.short_description && String(product.short_description).trim()) ||
+      (product.description && String(product.description).split(/[.\n]/).filter(Boolean)[0]) ||
+      '';
+    let desc = product.name + (primary ? ` — ${primary}` : '');
+    if (product.sku) desc += ` SKU: ${product.sku}`;
+    desc = desc.replace(/\s+/g, ' ').trim().slice(0, 160);
+    let m = document.querySelector('meta[name="description"]');
+    if (!m) { m = document.createElement('meta'); m.name = 'description'; document.head.appendChild(m); }
+    m.content = desc;
+  }, [product]);
+
   const handleAddToCart = async (qty = 1) => {
     if (!user) return toast({ title: 'Sign in required', description: 'Please sign in to add to cart.', variant: 'destructive' });
     if (!product) return;
-    const { error } = await supabase.from('cart_items').insert({ user_id: user.id, product_id: product.id, quantity: qty, name: product.name, price: product.price, images: product.images });
-    if (error) return toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    toast({ title: 'Added', description: 'Product added to cart', variant: 'default' });
-    navigate('/cart');
+    try {
+      // If an entry for this user+product exists, increment its quantity instead of inserting a duplicate.
+      const { data: existing } = await supabase
+        .from('cart_items')
+        .select('id, quantity')
+        .eq('user_id', user.id)
+        .eq('product_id', product.id)
+        .maybeSingle();
+      if (existing?.id) {
+        await supabase.from('cart_items').update({ quantity: (existing.quantity || 0) + qty }).eq('id', existing.id);
+      } else {
+        await supabase.from('cart_items').insert({ user_id: user.id, product_id: product.id, quantity: qty, name: product.name, price: product.price, images: product.images, sku: product.sku || null });
+      }
+      // Notify other tabs/components to recalculate cart count immediately
+      window.dispatchEvent(new Event('cart-updated'));
+      toast({ title: 'Added', description: 'Product added to cart', variant: 'default' });
+    } catch (err) {
+      toast({ title: 'Error', description: err.message || String(err), variant: 'destructive' });
+    }
   };
 
   const setQuantitySafe = (n) => {
@@ -48,7 +86,7 @@ export default function UnifiedPDP({ productId }) {
     return clamped;
   };
 
-  if (!product) return <div className="py-12 text-center">Loading...</div>;
+  if (!product) return <div className="py-6 text-center">Loading...</div>;
 
   const kit = isKitProduct(product);
 
@@ -59,17 +97,48 @@ export default function UnifiedPDP({ productId }) {
   const savePct = showMRP ? Math.round(((mrpNum - priceNum) / mrpNum) * 100) : 0;
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-6xl">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-        <div className="space-y-4">
-          <div className="relative w-full aspect-square bg-white rounded-2xl shadow overflow-hidden border">
-            <AnimatePresence initial={false}>
-              <motion.img key={images[selectedImage] || fallbackImg} src={images[selectedImage] || fallbackImg} alt={product.name} className="w-full h-full object-cover" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }} onError={e => { e.target.onerror = null; e.target.src = fallbackImg; }} />
-            </AnimatePresence>
+    <div className="container mx-auto px-3 sm:px-4 py-3 max-w-6xl">
+      {/* PDP breadcrumb: always data-driven from product canonical category
+          Structure: Home > All Products > Category Name > Product Name
+      */}
+      <nav aria-label="Breadcrumb" className="text-sm text-zinc-600 mb-4">
+        <Link to="/" className="hover:underline">Home</Link>
+        <span className="mx-2 text-zinc-400">›</span>
+        <Link to="/products" className="hover:underline">All Products</Link>
+        <span className="mx-2 text-zinc-400">›</span>
+        {(() => {
+          const parts = buildBreadcrumbParts(product.category);
+          const categoryLabel = parts.length ? parts[parts.length - 1] : (product.category || 'Category');
+          // Link to products filtered by the canonical category string
+          return (
+            <>
+              <Link to={`/products?category=${encodeURIComponent(product.category || '')}`} className="hover:underline">{categoryLabel}</Link>
+              <span className="mx-2 text-zinc-400">›</span>
+              <span className="text-zinc-500">{product.name}</span>
+            </>
+          );
+        })()}
+      </nav>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        <div className="space-y-3">
+          {/* Main image carousel: swipe/drag to navigate */}
+          <div
+            className="relative w-full aspect-square bg-white rounded-lg overflow-hidden border border-zinc-100"
+            role="region"
+            aria-label="Product images carousel"
+          >
+            <CarouselInner images={images} selectedIndex={selectedImage} onChangeIndex={setSelectedImage} fallback={fallbackImg} />
           </div>
-          <div className="flex gap-3 overflow-x-auto hide-scrollbar">
+          <div className="flex gap-3 overflow-x-auto hide-scrollbar py-1">
             {images.map((img, idx) => (
-              <button key={idx} onClick={() => setSelectedImage(idx)} className={`w-20 h-20 rounded-xl overflow-hidden border ${selectedImage===idx? 'border-primary shadow-md':'border-zinc-200'}`}>
+              <button
+                key={idx}
+                onClick={() => setSelectedImage(idx)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedImage(idx); } }}
+                aria-label={`View image ${idx + 1}`}
+                tabIndex={0}
+                className={`w-20 h-20 rounded-md flex-shrink-0 overflow-hidden border ${selectedImage===idx ? 'ring-2 ring-primary/60 border-primary' : 'border-zinc-200'} focus:outline-none`}
+              >
                 <img src={img} alt={`thumb-${idx}`} className="w-full h-full object-cover" onError={e => { e.target.onerror = null; e.target.src = fallbackImg; }} />
               </button>
             ))}
@@ -78,12 +147,16 @@ export default function UnifiedPDP({ productId }) {
 
         <div className="space-y-4">
           <div className="flex items-center gap-3 mb-2 flex-wrap">
-            <h1 className="text-3xl font-bold">{product.name}</h1>
+            <h1 className="text-3xl sm:text-3xl font-extrabold text-slate-900 leading-tight">{product.name}</h1>
             <ProductReviews productId={product.id} showSummaryOnly clickable={false} />
             {product.difficulty && <div className={`px-3 py-1 rounded-full text-xs font-semibold ${product.featured ? 'bg-indigo-100 text-indigo-700' : 'bg-zinc-100 text-zinc-700'}`}>{product.difficulty}</div>}
           </div>
+          {/* SKU display: subtle and consistent formatting (exact SKU from DB) */}
+          {product.sku && (
+            <div className="text-sm text-zinc-600 mb-2">SKU: <span className="font-mono text-sm text-zinc-800">{product.sku}</span></div>
+          )}
           <div className="flex items-center gap-3 mb-4">
-            <div className="text-2xl font-extrabold text-primary">₹{priceNum.toLocaleString('en-IN')}</div>
+            <div className="text-3xl font-extrabold text-primary">₹{priceNum.toLocaleString('en-IN')}</div>
             {showMRP && (
               <>
                 <div className="text-sm line-through text-gray-500">₹{mrpNum.toLocaleString('en-IN')}</div>
@@ -140,8 +213,8 @@ export default function UnifiedPDP({ productId }) {
 
           {kit && (
             <>
-              <div className="rounded-2xl bg-white border p-4 shadow-sm">
-                <h3 className="font-semibold mb-2">What's Included</h3>
+              <div className="rounded-lg bg-white border p-4">
+                <h3 className="font-semibold mb-2 text-primary">What's Included</h3>
                 <ul className="list-disc pl-5 text-sm text-zinc-700">
                   {(Array.isArray(product.includes) ? product.includes : (typeof product.includes === 'string' ? (function(){try{return JSON.parse(product.includes)}catch{return []}})() : [])).length > 0 ? (
                     (Array.isArray(product.includes) ? product.includes : (typeof product.includes === 'string' ? (function(){try{return JSON.parse(product.includes)}catch{return []}})() : [])).map((it, i) => <li key={i}>{it}</li>)
@@ -150,8 +223,8 @@ export default function UnifiedPDP({ productId }) {
                   )}
                 </ul>
               </div>
-              <div className="rounded-2xl bg-white border p-4 shadow-sm">
-                <h3 className="font-semibold mb-2">What You Will Learn</h3>
+              <div className="rounded-lg bg-white border p-4">
+                <h3 className="font-semibold mb-2 text-primary">What You Will Learn</h3>
                 <ul className="list-disc pl-5 text-sm text-zinc-700">
                   {(Array.isArray(product.outcomes) ? product.outcomes : (typeof product.outcomes === 'string' ? (function(){try{return JSON.parse(product.outcomes)}catch{return []}})() : [])).length > 0 ? (
                     (Array.isArray(product.outcomes) ? product.outcomes : (typeof product.outcomes === 'string' ? (function(){try{return JSON.parse(product.outcomes)}catch{return []}})() : [])).map((o, i) => <li key={i}>{o}</li>)
@@ -171,15 +244,15 @@ export default function UnifiedPDP({ productId }) {
 
           <div className="mt-4 space-y-2">
             <details open className="bg-white border rounded-lg p-3">
-              <summary className="font-medium cursor-pointer">Description</summary>
+              <summary className="font-semibold text-primary cursor-pointer border-b border-primary/10 pb-2 mb-2">Description</summary>
               <div className="mt-2 text-sm text-zinc-700">{product.description}</div>
             </details>
             <details open className="bg-white border rounded-lg p-3">
-              <summary className="font-medium cursor-pointer">Specifications</summary>
-              <div className="mt-2 text-sm text-zinc-700">{product.specifications || 'See product page for detailed specs.'}</div>
+              <summary className="font-semibold text-primary cursor-pointer border-b border-primary/10 pb-2 mb-2">Specifications</summary>
+              <div className="mt-2 text-sm text-zinc-700">{renderSpecifications(product.specifications) || 'See product page for detailed specs.'}</div>
             </details>
             <details open className="bg-white border rounded-lg p-3">
-                <summary className="font-medium cursor-pointer">FAQs</summary>
+                <summary className="font-semibold text-primary cursor-pointer border-b border-primary/10 pb-2 mb-2">FAQs</summary>
                 <div className="mt-2 text-sm text-zinc-700">
                   {(() => {
                     const v = product.faq;
@@ -231,6 +304,161 @@ export default function UnifiedPDP({ productId }) {
   );
 }
 
+// Inline small carousel inner component to handle pointer dragging and sync
+function CarouselInner({ images = [], selectedIndex = 0, onChangeIndex = () => {}, fallback }) {
+  const containerRef = useRef(null);
+  const startX = useRef(0);
+  const deltaX = useRef(0);
+  const pointerIdRef = useRef(null);
+  const isDragging = useRef(false);
+  const [localIndex, setLocalIndex] = useState(selectedIndex);
+
+  useEffect(() => { setLocalIndex(selectedIndex); }, [selectedIndex]);
+
+  const clampIndex = (i) => Math.max(0, Math.min(images.length - 1, i));
+
+  const applyTransform = () => {
+    const inner = containerRef.current?.querySelector('[data-carousel-inner]');
+    if (!inner) return;
+    const w = containerRef.current.clientWidth || 0;
+    const base = -localIndex * w;
+    const x = base + (isDragging.current ? deltaX.current : 0);
+    inner.style.transform = `translateX(${x}px)`;
+    inner.style.transition = isDragging.current ? 'none' : 'transform 260ms cubic-bezier(.2,.9,.2,1)';
+  };
+
+  useEffect(() => { applyTransform(); }, [localIndex]);
+
+  const onPointerDown = (e) => {
+    if (!containerRef.current) return;
+    pointerIdRef.current = e.pointerId;
+    isDragging.current = true;
+    startX.current = e.clientX;
+    deltaX.current = 0;
+    containerRef.current.setPointerCapture?.(pointerIdRef.current);
+    applyTransform();
+  };
+
+  const onPointerMove = (e) => {
+    if (!isDragging.current || e.pointerId !== pointerIdRef.current) return;
+    deltaX.current = e.clientX - startX.current;
+    applyTransform();
+  };
+
+  const onPointerUp = (e) => {
+    if (!isDragging.current || e.pointerId !== pointerIdRef.current) return;
+    isDragging.current = false;
+    containerRef.current.releasePointerCapture?.(pointerIdRef.current);
+    const w = containerRef.current.clientWidth || 0;
+    const threshold = Math.max(40, w * 0.12); // 12% or 40px
+    if (deltaX.current > threshold) {
+      // swipe right -> previous
+      const ni = clampIndex(localIndex - 1);
+      setLocalIndex(ni);
+      onChangeIndex(ni);
+    } else if (deltaX.current < -threshold) {
+      const ni = clampIndex(localIndex + 1);
+      setLocalIndex(ni);
+      onChangeIndex(ni);
+    } else {
+      // snap back
+      setLocalIndex((i) => i);
+    }
+    deltaX.current = 0;
+    applyTransform();
+  };
+
+  // keyboard navigation
+  const onKeyDown = (e) => {
+    if (e.key === 'ArrowRight') { const ni = clampIndex(localIndex + 1); setLocalIndex(ni); onChangeIndex(ni); }
+    if (e.key === 'ArrowLeft') { const ni = clampIndex(localIndex - 1); setLocalIndex(ni); onChangeIndex(ni); }
+  };
+
+  return (
+    <div ref={containerRef} className="w-full h-full touch-none" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onKeyDown={onKeyDown} tabIndex={0} style={{ outline: 'none' }}>
+      <div data-carousel-inner className="flex w-full h-full" style={{ transform: `translateX(${-localIndex * 100}%)`, transition: 'transform 260ms cubic-bezier(.2,.9,.2,1)' }}>
+        {images.map((src, idx) => (
+          <div key={idx} className="w-full h-full flex-shrink-0" style={{ minWidth: '100%', height: '100%' }}>
+            <img src={src || fallback} alt={`Image ${idx+1}`} className="w-full h-full object-cover" onError={(e) => { e.target.onerror = null; e.target.src = fallback; }} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function renderSpecifications(specs) {
+  if (!specs || typeof specs !== 'string') return null;
+
+  // 1. Try JSON first (new products)
+  try {
+    const parsed = JSON.parse(specs);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const entries = Object.entries(parsed);
+      if (entries.length > 0) {
+        return (
+          <table className="w-full text-sm">
+            <colgroup>
+              <col style={{ width: '200px' }} />
+              <col />
+            </colgroup>
+            <tbody>
+              {entries.map(([key, value]) => (
+                <tr key={key} className="align-top">
+                  <th className="font-medium text-zinc-800 pr-4 text-left">{key}</th>
+                  <td className="text-zinc-600">{String(value)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        );
+      }
+    }
+  } catch {
+    // Not JSON, continue
+  }
+
+  // 2. Key: Value pairs (comma or newline separated)
+  if (specs.includes(':')) {
+    const pairs = specs
+      .split(/\n|,/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .map(line => {
+        const idx = line.indexOf(':');
+        if (idx === -1) return null;
+        return {
+          key: line.slice(0, idx).trim(),
+          value: line.slice(idx + 1).trim()
+        };
+      })
+      .filter(Boolean);
+
+    if (pairs.length > 0) {
+      return (
+        <table className="w-full text-sm">
+          <colgroup>
+            <col style={{ width: '200px' }} />
+            <col />
+          </colgroup>
+          <tbody>
+            {pairs.map(({ key, value }, idx) => (
+              <tr key={idx} className="align-top">
+                <th className="font-medium text-zinc-800 pr-4 text-left">{key}</th>
+                <td className="text-zinc-600">{value}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      );
+    }
+  }
+
+  // 3. Fallback: plain text
+  return <p className="text-sm text-zinc-700 whitespace-pre-line">{specs}</p>;
+}
+// This is a code that I have pasted from ChatGPT to show the specs on the PDP in Key, value pair
+
 function RelatedBlock({ currentId, isKit, category }) {
   const [related, setRelated] = useState([]);
   const [isFetching, setIsFetching] = useState(false);
@@ -249,9 +477,13 @@ function RelatedBlock({ currentId, isKit, category }) {
         // Primary query: match category (or kit categories) and exclude current
         // Use a minimal select set to avoid errors if optional columns like `visible` don't exist.
         let res;
-        const cols = 'id, name, price, images, category, original_price, old_price, short_description, created_at';
+        const cols = 'id, name, price, images, category, original_price, short_description, created_at';
         if (isKit) {
-          res = await supabase.from('products').select(cols).neq('id', currentId).in('category', ['Arduino Kits','IoT Kits','Beginner Kits','Sensors','Robotics','Learning Projects']).limit(12);
+          const kitCategories = ['Arduino Kits','IoT Kits','Beginner Kits','Sensors','Robotics','Learning Projects'];
+          // Use an explicit OR expression instead of `.in()` to avoid REST parsing issues
+          // with unquoted string values that can produce HTTP 400 from the REST endpoint.
+          const orExpr = kitCategories.map(c => `category.eq.${c}`).join(',');
+          res = await supabase.from('products').select(cols).neq('id', currentId).or(orExpr).limit(12);
         } else if (category) {
           res = await supabase.from('products').select(cols).neq('id', currentId).eq('category', category).limit(12);
         } else {

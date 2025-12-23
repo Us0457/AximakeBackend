@@ -40,11 +40,9 @@ const YourQuotesPage = () => {
   };
 
   return (
-    <Card className="max-w-2xl mx-auto mt-8 w-full">
-      <CardHeader>
-        <CardTitle><FileText className="inline-block mr-2 text-primary" />Your Quotes</CardTitle>
-      </CardHeader>
-      <CardContent>
+    <div className="container mx-auto py-0 px-2 sm:px-4">
+      <h1 className="text-3xl font-bold mb-8 gradient-text text-center">Your Quotes</h1>  
+    
         {loading ? (
           <div className="text-muted-foreground text-center py-8">Loading...</div>
         ) : quotes.length === 0 ? (
@@ -74,8 +72,7 @@ const YourQuotesPage = () => {
             ))}
           </div>
         )}
-      </CardContent>
-    </Card>
+    </div>
   );
 };
 

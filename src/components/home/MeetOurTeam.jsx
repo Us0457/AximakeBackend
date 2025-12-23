@@ -9,7 +9,7 @@ import React from 'react';
     const MeetOurTeam = () => (
       <motion.section
         id="meet-our-team-section"
-        className="py-16 md:py-24 bg-muted/30"
+        className="py-16 md:py-24 bg-gradient-to-br from-blue-50 via-indigo-50 to-white"
         variants={containerVariants}
         initial="hidden"
         whileInView="visible"
