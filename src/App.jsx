@@ -33,6 +33,8 @@ import React, { useEffect } from 'react';
     import AdminSettingsPage from '@/pages/AdminSettingsPage';
     import ReviewForm from '@/pages/ReviewForm';
     import ProductReviewsPage from '@/pages/ProductReviewsPage';
+    import SupportForumPage from '@/pages/SupportForumPage';
+    import SupportThreadPage from '@/pages/SupportThreadPage';
     import CouponsManagementPage from '@/pages/admin/CouponsManagementPage';
     import './index.css';
 
@@ -109,6 +111,8 @@ import React, { useEffect } from 'react';
                 <Route path="/admin/custom-print-settings" element={<CustomPrintSettingsPage />} />
                 <Route path="/review/:orderId/:productId" element={<ReviewForm />} />
                 <Route path="/product/:id/reviews" element={<ProductReviewsPage />} />
+                <Route path="/support/forum" element={<SupportForumPage />} />
+                <Route path="/support/forum/:id" element={<SupportThreadPage />} />
                 <Route path="/admin/coupons" element={<CouponsManagementPage />} />
               </Routes>
             </Layout>

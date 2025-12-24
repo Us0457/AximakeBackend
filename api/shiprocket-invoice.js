@@ -2,7 +2,7 @@
 // Usage: /api/shiprocket-invoice?shipment_id=... (GET or POST)
 import { getInvoiceUrlByOrderId, getShipmentStatus } from '../src/lib/shiprocketService.js';
 import { createClient } from '@supabase/supabase-js';
-import { mapShiprocketStatus } from './shiprocket-status-util.js';
+import { normalizeStatus, isProgressionAllowed, isFinalStatus } from '../src/lib/shiprocket-normalizer.js';
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
@@ -41,21 +41,33 @@ export default async function handler(req, res) {
     let latestStatus = 'INVOICED';
     let latestStatusCode = null;
     try {
-      const tracking = await getShipmentStatus(shipment_id);
+      const tracking = await getTracking({ order_id: String(order_id) });
       latestStatus = tracking?.tracking_data?.shipment_track?.[0]?.current_status ||
                      tracking?.tracking_data?.shipment_status?.current_status ||
                      latestStatus;
       latestStatusCode = tracking?.tracking_data?.shipment_track?.[0]?.status_code ||
                         tracking?.tracking_data?.status_code || null;
-      latestStatus = mapShiprocketStatus(latestStatus, latestStatusCode);
+      latestStatus = normalizeStatus(latestStatus, latestStatusCode);
     } catch (e) {
-      // fallback: use 'INVOICED'
+      // fallback: use 'INVOICED' and do not throw — preserve existing DB state
+      console.warn('shiprocket-invoice: tracking fetch failed', e?.message || e);
     }
-    // Update order status in DB to latest status
-    await supabase
-      .from('orders')
-      .update({ shiprocket_status: latestStatus, order_status: latestStatus })
-      .eq('shiprocket_shipment_id', shipment_id);
+    // Update order status in DB to latest status, but enforce forward-only transitions
+    const { data: existingRows } = await supabase.from('orders').select('id,shiprocket_status,order_status').eq('shiprocket_shipment_id', shipment_id).limit(1);
+    const existing = Array.isArray(existingRows) && existingRows.length ? existingRows[0] : null;
+    const updates = {};
+    if (existing) {
+      if (!isFinalStatus(existing.shiprocket_status) && isProgressionAllowed(existing.shiprocket_status, latestStatus)) {
+        updates.shiprocket_status = latestStatus;
+        updates.order_status = latestStatus;
+      }
+    } else {
+      updates.shiprocket_status = latestStatus;
+      updates.order_status = latestStatus;
+    }
+    if (Object.keys(updates).length) {
+      await supabase.from('orders').update(updates).eq('shiprocket_shipment_id', shipment_id);
+    }
     // Return invoice_url to frontend
     return res.status(200).json({ invoice_url });
   } catch (err) {

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 // Reordered navItems to match homepage section order
 const navItems = [
 	{ name: 'Home', path: '/', type: 'route' },
+	{ name: 'Support', path: '/support/forum', type: 'route' },
 	{ name: 'Services', path: '#fdm-section', type: 'scroll', targetId: 'fdm-section' },
 	{ name: 'Testimonials', path: '#testimonials', type: 'scroll', targetId: 'testimonials-section' },
 	{ name: 'About Us', path: '#about-us', type: 'scroll', targetId: 'about-us-section' },

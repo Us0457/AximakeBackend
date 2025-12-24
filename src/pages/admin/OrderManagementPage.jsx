@@ -158,6 +158,17 @@ const OrderManagementPage = () => {
     if (!order.shiprocket_shipment_id) return;
     setRefreshing(prev => ({ ...prev, [order.shiprocket_shipment_id]: true }));
     try {
+      // If order is in a final state, skip external refresh to avoid regressions
+      const currentFallback = order.shiprocket_status || order.order_status || "pending";
+      const currentLabel = getLatestScanLabel(order.shiprocket_events, currentFallback) || currentFallback;
+      const curNorm = (String(currentLabel || "")).toLowerCase();
+      if (curNorm.includes('delivered') || curNorm.includes('cancel') || curNorm.includes('fulfilled')) {
+        // nothing to refresh for final states
+        setRefreshing(prev => ({ ...prev, [order.shiprocket_shipment_id]: false }));
+        alert('Order is in a final state; refresh skipped.');
+        return;
+      }
+
       const res = await fetch(getApiUrl(`/api/shiprocket-tracking/${order.shiprocket_shipment_id}`));
       if (!res.ok) {
         const text = await res.text();
@@ -168,13 +179,17 @@ const OrderManagementPage = () => {
       const awb = data?.tracking_data?.shipment_track?.[0]?.awb_code || order.shiprocket_awb;
       const courier = data?.tracking_data?.shipment_track?.[0]?.courier_name || order.shiprocket_courier;
       const track_url = data?.tracking_data?.track_url || null;
-      // Update in DB for consistency
-      await supabase.from('orders').update({
-        shiprocket_status: status,
+      // Avoid promoting transient "ready" labels to the canonical shiprocket_status via manual refresh.
+      const fetchedNorm = String(status || '').toLowerCase();
+      const shouldWriteStatus = status && !fetchedNorm.includes('ready');
+      // Update only AWB/courier/track_url and conditionally status
+      const updates = {
         shiprocket_awb: awb,
         shiprocket_courier: courier,
         shiprocket_track_url: track_url
-      }).eq('shiprocket_shipment_id', order.shiprocket_shipment_id);
+      };
+      if (shouldWriteStatus) updates.shiprocket_status = status;
+      await supabase.from('orders').update(updates).eq('shiprocket_shipment_id', order.shiprocket_shipment_id);
       // Add a short delay to ensure DB update is reflected before fetching
       await new Promise(resolve => setTimeout(resolve, 350));
       await fetchOrders();
@@ -183,6 +198,48 @@ const OrderManagementPage = () => {
       alert('Failed to refresh status: ' + (e?.message || e));
     }
     setRefreshing(prev => ({ ...prev, [order.shiprocket_shipment_id]: false }));
+  }
+
+  // Cancel order with guards: only allow cancellation for non-final states and before AWB assignment
+  async function handleCancelOrder(order) {
+    const currentFallback = order.shiprocket_status || order.order_status || "pending";
+    const currentLabel = getLatestScanLabel(order.shiprocket_events, currentFallback) || currentFallback;
+    const curNorm = (String(currentLabel || "")).toLowerCase();
+
+    // Disallow cancelling final states
+    if (curNorm.includes('delivered') || curNorm.includes('cancel') || curNorm.includes('fulfilled')) {
+      alert('Order is in a final state and cannot be cancelled.');
+      return;
+    }
+
+    // Disallow cancelling after AWB assigned — Shiprocket cancellation requires logistics intervention
+    if (order.shiprocket_awb) {
+      alert('Cannot cancel order after AWB has been assigned. Please contact logistics.');
+      return;
+    }
+
+    // Only allow cancel from early stages (pending/processing/ready)
+    if (!(curNorm.includes('pending') || curNorm.includes('processing') || curNorm.includes('ready') || curNorm.includes('new'))) {
+      alert('Order cannot be cancelled in its current state.');
+      return;
+    }
+
+    // Proceed with cancellation: update DB and notify customer
+    setStatusUpdating(true);
+    try {
+      await supabase.from('orders').update({ order_status: 'cancelled' }).eq('id', order.id);
+      // Optionally send notification via existing email flow by reusing handleStatusChange for consistency
+      try {
+        await handleStatusChange(order, 'cancelled');
+      } catch (e) {
+        // ignore secondary email errors
+      }
+      await fetchOrders();
+    } catch (e) {
+      console.error('Failed to cancel order:', e);
+      alert('Failed to cancel order: ' + (e?.message || e));
+    }
+    setStatusUpdating(false);
   }
 
   // Download Shiprocket invoice and refresh orders
@@ -368,7 +425,7 @@ const OrderManagementPage = () => {
                   <Button size="sm" variant="outline" disabled={statusUpdating} onClick={e => {e.stopPropagation(); handleStatusChange(o, "delivered");}}>
                     Mark Delivered
                   </Button>
-                  <Button size="sm" variant="outline" disabled={statusUpdating} onClick={e => {e.stopPropagation(); handleStatusChange(o, "cancelled");}}>
+                  <Button size="sm" variant="outline" disabled={statusUpdating} onClick={e => {e.stopPropagation(); handleCancelOrder(o);}}>
                     Cancel
                   </Button>
                   {/* Ship Now button: only show if shipment_id exists and not shipped */}

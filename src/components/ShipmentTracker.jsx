@@ -20,7 +20,9 @@ function normalizeStatus(status) {
   if (s.includes('out for') || s.includes('ofd')) return 'out_for_delivery';
   if (s.includes('deliv') || s.includes('delivered')) return 'delivered';
   if (s.includes('in transit') || s.includes('transit')) return 'in_transit';
-  if (s.includes('ship') || s.includes('shipped') || s.includes('ready')) return 'shipped';
+  // Treat "ready" as a pre-shipment milestone (do not advance timeline to 'shipped')
+  if (s.includes('ready') || s.includes('ready to ship') || s.includes('ready_to_ship')) return 'ready_to_ship';
+  if (s.includes('ship') || s.includes('shipped')) return 'shipped';
   const m = s.match(/\d+/);
   if (m) {
     const code = Number(m[0]);
@@ -66,6 +68,7 @@ export default function ShipmentTracker({ status, events }) {
     const ns = normalizeStatus(txt);
     if (ns) return ns;
     if (txt.includes('manifest')) return 'shipped';
+    if (txt.includes('ready to ship') || txt.includes('ready') || txt.includes('ready_to_ship')) return 'ready_to_ship';
     if (txt.includes('out for delivery') || txt.includes('ofd')) return 'out_for_delivery';
     if (txt.includes('deliver') || txt.includes('delivered') || txt.includes('dlv')) return 'delivered';
     if (txt.includes('pick') || txt.includes('bag') || txt.includes('facility') || txt.includes('trip') || txt.includes('in transit')) return 'in_transit';

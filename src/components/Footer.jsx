@@ -88,6 +88,7 @@ const Footer = () => {
                 <li><Link to="/shipping-policy" className="hover:text-slate-900 transition">Shipping Policy</Link></li>
                 <li><Link to="/refunds" className="hover:text-slate-900 transition">Refund &amp; Returns</Link></li>
                 <li><Link to="/faq" className="hover:text-slate-900 transition">FAQs</Link></li>
+                <li><Link to="/support/forum" className="hover:text-slate-900 transition">Tech Support Forum</Link></li>
               </ul>
 
               <div className="flex items-center gap-4">
