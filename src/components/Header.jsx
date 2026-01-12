@@ -439,7 +439,7 @@ import React, { useState, useEffect, useRef } from 'react';
           transition={{ duration: 0.5, ease: "easeOut" }}
           className={`sticky top-0 z-50 w-full border-b border-border/40  ${isScrolled ? 'bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 shadow-lg' : 'bg-transparent' } transition-all duration-300`}
         >
-          <div className="container mx-auto flex h-20 items-center justify-between px-4 relative">
+          <div className="container mx-auto flex h-20 items-center justify-between px-2 sm:px-4 lg:px-0 relative">
             {/* Brand/Logo section */}
             <button
               className="flex items-center focus:outline-none"

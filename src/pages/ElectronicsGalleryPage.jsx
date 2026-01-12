@@ -121,7 +121,7 @@ const ElectronicsGalleryPage = () => {
   };
 
   return (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="container mx-auto px-4 py-8 max-w-7xl">
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="container mx-auto px-2 sm:px-4 lg:px-6 py-8 max-w-7xl">
       <h1 className="text-3xl md:text-4xl font-bold mb-6">Electronics Kits</h1>
 
       <div className="flex flex-col md:flex-row gap-6">

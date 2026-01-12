@@ -3,7 +3,7 @@ const express = require('express');
 const nodemailer = require('nodemailer');
 const cors = require('cors');
 // shiprocketService is an ES module; we'll dynamically import it at startup
-let createShipment, downloadInvoice, printAndDownloadInvoice, getTracking, generateAWB, getShipmentStatus;
+let createShipment, downloadInvoice, printAndDownloadInvoice, getTracking, generateAWB, getShipmentStatus, getOrderDetails, getShipmentDetails, getLabel, cancelOrders, fetchInvoiceUrlRaw;
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -31,6 +31,8 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+// Optionally use an external webhook handler module (ESM) if present.
+let externalWebhookHandler = null;
 
 // Helper to transform your order payload to Shiprocket API format
 function transformOrderToShiprocket(order) {
@@ -735,9 +737,22 @@ async function logisticsWebhookHandler(req, res) {
 }
 
 // Register both the old internal route (kept for compatibility) and the new neutral route.
-// Shiprocket should be configured to call the neutral path below.
-app.post('/api/logistics/webhook', logisticsWebhookHandler);
-app.post('/api/shiprocket-webhook', logisticsWebhookHandler);
+// If `externalWebhookHandler` is loaded at startup it will be used; otherwise
+// fall back to the built-in `logisticsWebhookHandler` defined above.
+function webhookRouter(handlerA, handlerB) {
+  return async function (req, res) {
+    try {
+      if (externalWebhookHandler) return await externalWebhookHandler(req, res);
+      return await handlerA(req, res);
+    } catch (e) {
+      // Last-resort fallback: try the other handler
+      try { return await handlerB(req, res); } catch (e2) { console.error('Webhook router failure', e, e2); res.status(500).json({ error: 'internal' }); }
+    }
+  };
+}
+
+app.post('/api/logistics/webhook', webhookRouter(logisticsWebhookHandler, logisticsWebhookHandler));
+app.post('/api/shiprocket-webhook', webhookRouter(logisticsWebhookHandler, logisticsWebhookHandler));
 
 // Shiprocket status sync endpoint (for status refresh and AWB sync)
 app.post('/api/shiprocket-status', async (req, res) => {
@@ -840,21 +855,371 @@ app.get('/api/shiprocket-invoice', async (req, res) => {
     return res.status(400).json({ error: 'shipment_id required' });
   }
   try {
-    // Use the print endpoint to trigger status change and get the PDF
-    const result = await printAndDownloadInvoice(shipment_id);
-    if (!result || !result.buffer) {
-      return res.status(404).json({ error: 'Invoice not found' });
+    // Look up Shiprocket numeric order_id for this shipment_id
+    const { data: rows, error } = await supabase.from('orders').select('shiprocket_order_id').eq('shiprocket_shipment_id', shipment_id).limit(1);
+    if (error || !rows || rows.length === 0) return res.status(404).json({ error: 'Order not found for this shipment_id' });
+    const shiprocketOrderId = rows[0].shiprocket_order_id;
+    if (!shiprocketOrderId) return res.status(400).json({ error: 'No shiprocket_order_id found for this shipment_id' });
+
+    // Call Shiprocket POST /orders/print/invoice with { ids: [orderId] }
+    const srResp = await fetchInvoiceUrlRaw(shiprocketOrderId);
+    try { console.log('Shiprocket invoice raw response (server):', JSON.stringify(srResp)); } catch (e) {}
+
+    const invoice_url = srResp && srResp.data && srResp.data.invoice_url ? srResp.data.invoice_url : null;
+    if (invoice_url) {
+      // If caller requested to skip DB update (frontend wants to just open invoice), respect that flag
+      const skipUpdate = req.query && (String(req.query.skip_update || req.query.skipUpdate || req.query.no_update || req.query.noUpdate || '').toLowerCase() === '1' || String(req.query.skip_update || req.query.skipUpdate || req.query.no_update || req.query.noUpdate || '').toLowerCase() === 'true');
+      if (!skipUpdate) {
+        // Optionally update DB to INVOICED
+        await supabase.from('orders').update({ shiprocket_status: 'INVOICED', order_status: 'INVOICED' }).eq('shiprocket_shipment_id', shipment_id);
+      }
+      return res.status(200).json({ invoice_url });
     }
-    // Update order status in DB to INVOICED
-    await supabase
-      .from('orders')
-      .update({ shiprocket_status: 'INVOICED', order_status: 'INVOICED' })
-      .eq('shiprocket_shipment_id', shipment_id);
-    res.setHeader('Content-Type', result.contentType);
-    res.setHeader('Content-Disposition', result.contentDisposition);
-    res.send(result.buffer);
+
+    // No invoice URL yet — return a clear client-friendly message
+    const details = (srResp && srResp.data && (srResp.data.message || srResp.data.error)) ? (srResp.data.message || srResp.data.error) : `Shiprocket returned status ${srResp && srResp.status}`;
+    return res.status(409).json({ error: 'Invoice not generated yet', details });
   } catch (err) {
     res.status(500).json({ error: 'Invoice download failed: ' + (err.message || err) });
+  }
+});
+
+// Central Shiprocket actions handler (single or bulk)
+app.post('/api/shiprocket-actions', async (req, res) => {
+  const { action, ids } = req.body || {};
+  if (!action) return res.status(400).json({ error: 'action required' });
+  if (!ids) return res.status(400).json({ error: 'ids required (array of shiprocket_order_id)' });
+  const orderIds = Array.isArray(ids) ? ids.map(Number).filter(Boolean) : [Number(ids)].filter(Boolean);
+  if (!orderIds.length) return res.status(400).json({ error: 'no valid shiprocket order ids provided' });
+
+  try {
+    // Fetch orders matching provided Shiprocket order ids
+    const { data: rows, error } = await supabase.from('orders').select('id, shiprocket_order_id, shiprocket_shipment_id, shiprocket_awb, shiprocket_status, shiprocket_events, shiprocket_track_url, shiprocket_courier').in('shiprocket_order_id', orderIds);
+    if (error) {
+      console.error('shiprocket-actions: DB lookup failed', error);
+      return res.status(500).json({ error: 'DB lookup failed' });
+    }
+    const byOrderId = (rows || []).reduce((acc, r) => { acc[r.shiprocket_order_id] = r; return acc; }, {});
+
+    const results = { success: [], skipped: [], errors: [] };
+
+    // Helper to record skip
+    function skip(id, reason) { results.skipped.push({ id, reason }); }
+    function recordSuccess(id, info) { results.success.push({ id, info }); }
+    function recordError(id, err) { results.errors.push({ id, error: String(err) }); }
+
+    // Helper: fetch full DB row and filter update keys to only existing columns
+    async function filterUpdatesToExisting(rowId, updates) {
+      try {
+        const { data: fullRows, error: fullErr } = await supabase.from('orders').select('*').eq('id', rowId).limit(1);
+        if (fullErr) return { filtered: {}, error: fullErr };
+        const existing = Array.isArray(fullRows) && fullRows.length ? fullRows[0] : null;
+        if (!existing) return { filtered: {}, error: new Error('existing row not found') };
+        const allowed = Object.keys(existing);
+        const filtered = {};
+        for (const k of Object.keys(updates)) {
+          if (allowed.includes(k)) filtered[k] = updates[k];
+          else console.warn('[shiprocket-actions] skipping update key not in table:', k);
+        }
+        return { filtered };
+      } catch (e) {
+        return { filtered: {}, error: e };
+      }
+    }
+
+    // Validate and execute per-action
+    for (const oid of orderIds) {
+      const row = byOrderId[oid];
+      if (!row) { skip(oid, 'order not found'); continue; }
+      const status = (row.shiprocket_status || '').toLowerCase();
+
+      try {
+        if (action === 'ship') {
+          // Ship (generate AWB) - requires shipment_id and currently only allowed when status is NEW
+          if (!row.shiprocket_shipment_id) { skip(oid, 'no shipment id'); continue; }
+          if (!status.includes('new')) { skip(oid, 'can only ship orders in NEW status'); continue; }
+          // call generateAWB per shipment
+          try {
+            const resp = await generateAWB(row.shiprocket_shipment_id);
+            const awbCode = resp.awb_code || resp.raw?.response?.data?.awb_code || null;
+            const courierName = resp.courier_name || resp.raw?.response?.data?.courier_name || null;
+            // Update DB: set AWB and mark as Ready To Ship so UI reflects new state
+            try {
+              await supabase.from('orders').update({ shiprocket_awb: awbCode, shiprocket_courier: courierName, shiprocket_status: 'Ready To Ship' }).eq('id', row.id);
+            } catch (dbErr) {
+              console.error('Failed to update order after AWB generation for', oid, dbErr);
+            }
+            recordSuccess(oid, { awb: awbCode });
+          } catch (e) { recordError(oid, e.message || e); }
+        } else if (action === 'download_invoice') {
+          // Get invoice URL via Shiprocket order ID
+          try {
+            const sr = await fetchInvoiceUrlRaw(oid);
+            const url = sr && sr.data && sr.data.invoice_url ? sr.data.invoice_url : null;
+            if (url) recordSuccess(oid, { invoice_url: url }); else skip(oid, 'invoice not generated yet');
+          } catch (e) { recordError(oid, e.message || e); }
+        } else if (action === 'download_label') {
+          // Label requires shipment_id and AWB may be present
+          if (!row.shiprocket_shipment_id) { skip(oid, 'no shipment id'); continue; }
+          try {
+            const labelUrl = await getLabel(row.shiprocket_shipment_id);
+            if (labelUrl) recordSuccess(oid, { label_url: labelUrl }); else skip(oid, 'label not available');
+          } catch (e) { recordError(oid, e.message || e); }
+        } else if (action === 'sync_order') {
+          // Sync order-level details from Shiprocket using order_id tracking response
+          if (!row.shiprocket_order_id) { skip(oid, 'no shiprocket_order_id'); continue; }
+          try {
+            // Use Shiprocket orders/show endpoint to fetch authoritative order details
+            try {
+              const odResp = await getOrderDetails(oid);
+              const od = odResp?.data || odResp;
+              console.log('[shiprocket-actions] sync_order: orders/show response keys:', Object.keys(od || {}));
+              const updates = {};
+              // Order-level status
+              const fetchedStatus = od?.status || od?.order_status || od?.order_status_label || od?.shipment_status || null;
+              if (fetchedStatus && String(fetchedStatus).toLowerCase() !== String(row.shiprocket_status || '').toLowerCase()) updates.shiprocket_status = fetchedStatus;
+                  // Respect caller intent: allow skipping DB updates by passing skip_update=1 or skip_update=true as a query param
+                  const skipUpdate = req.query && (String(req.query.skip_update || req.query.skipUpdate || req.query.no_update || req.query.noUpdate || '').toLowerCase() === '1' || String(req.query.skip_update || req.query.skipUpdate || req.query.no_update || req.query.noUpdate || '').toLowerCase() === 'true');
+                  if (!skipUpdate) {
+                    const updates = { order_status: 'INVOICED' };
+                    if (awb_code) updates.shiprocket_awb = awb_code;
+                    if (courier_company_name) updates.shiprocket_courier = courier_company_name;
+                    if (existing && existing.shiprocket_order_id && typeof shiprocket_status === 'string') updates.shiprocket_status = shiprocket_status;
+                    await supabase.from('orders').update(updates).eq('shiprocket_shipment_id', shipment_id);
+                  }
+              const fetchedPayment = od?.payment_status || od?.paymentStatus || null;
+              if (fetchedPayment && fetchedPayment !== row.payment_status) updates.payment_status = fetchedPayment;
+              // Order value/total
+              const fetchedValue = od?.amount || od?.order_value || od?.total || od?.grand_total || od?.final_price || null;
+              if ((typeof fetchedValue !== 'undefined') && fetchedValue !== null && Number(fetchedValue) !== Number(row.price || row.total || 0)) updates.price = Number(fetchedValue);
+              // Customer details (non-destructive)
+              const fetchedCustomerName = od?.billing_customer_name || od?.customer_name || (od?.billing && od.billing.name) || null;
+              if (fetchedCustomerName && (!row.customer_name || row.customer_name !== fetchedCustomerName)) updates.customer_name = fetchedCustomerName;
+              // Track URL
+              const fetchedTrackUrl = od?.tracking_url || od?.track_url || od?.data?.track_url || null;
+              if (fetchedTrackUrl && fetchedTrackUrl !== row.shiprocket_track_url) updates.shiprocket_track_url = fetchedTrackUrl;
+              // If Shiprocket returned shipment objects, try to pull shipment_id/awb/courier
+              const shipments = od?.shipments || od?.data?.shipments || od?.shipment || null;
+              if (Array.isArray(shipments) && shipments.length) {
+                const first = shipments[0];
+                const sid = first?.shipment_id || first?.id || first?.shipmentId || null;
+                const awb = first?.awb || first?.awb_code || first?.tracking_number || null;
+                const courier = first?.courier || first?.courier_name || null;
+                if (sid && !row.shiprocket_shipment_id) updates.shiprocket_shipment_id = sid;
+                if (awb && awb !== row.shiprocket_awb) updates.shiprocket_awb = awb;
+                if (courier && courier !== row.shiprocket_courier) updates.shiprocket_courier = courier;
+              }
+              if (Object.keys(updates).length) {
+                try {
+                  console.log('[shiprocket-actions] sync_order: updating DB for oid', oid, 'id', row.id, 'updates', updates);
+                  const { filtered, error: filterErr } = await filterUpdatesToExisting(row.id, updates);
+                  if (filterErr) {
+                    console.error('[shiprocket-actions] sync_order: failed to fetch existing row for filtering', filterErr);
+                    recordError(oid, filterErr.message || filterErr);
+                  } else if (!filtered || Object.keys(filtered).length === 0) {
+                    console.log('[shiprocket-actions] sync_order: no valid columns to update after filtering for oid', oid);
+                    skip(oid, 'no valid columns to update');
+                  } else {
+                    const { data: upData, error: upErr } = await supabase.from('orders').update(filtered).eq('id', row.id).select();
+                    if (upErr) {
+                      console.error('[shiprocket-actions] sync_order: DB update failed for oid', oid, upErr);
+                      recordError(oid, upErr.message || upErr);
+                    } else {
+                      recordSuccess(oid, { updated: Object.keys(filtered), db: Array.isArray(upData) && upData.length ? upData[0] : upData });
+                    }
+                  }
+                } catch (dbEx) {
+                  console.error('[shiprocket-actions] sync_order: unexpected DB update exception for oid', oid, dbEx);
+                  recordError(oid, dbEx.message || dbEx);
+                }
+              } else {
+                skip(oid, 'no changes');
+              }
+            } catch (e2) {
+              recordError(oid, e2.message || e2);
+            }
+          } catch (e) { recordError(oid, e.message || e); }
+        } else if (action === 'sync_shipment') {
+          // Sync shipment-level details using the authoritative Shiprocket /shipments/{id} endpoint
+          if (!row.shiprocket_shipment_id) { skip(oid, 'no shipment id'); continue; }
+          try {
+            let sresp = null;
+            try {
+              console.log('[shiprocket-actions] sync_shipment: calling getShipmentDetails for shipment_id', row.shiprocket_shipment_id, 'oid', oid);
+              sresp = await getShipmentDetails(row.shiprocket_shipment_id);
+            } catch (err) {
+              const msg = err && err.message ? err.message : String(err);
+              if (msg.includes('404')) {
+                skip(oid, 'shipment not found (404)');
+                continue;
+              }
+              throw err;
+            }
+
+            const s = sresp?.data || sresp || {};
+            console.log('[shiprocket-actions] sync_shipment: shipment response keys:', Object.keys(s || {}));
+
+            // Conservative parsing of possible fields
+            const fetchedAwb = s?.awb || s?.awb_code || s?.tracking_number || s?.data?.awb || s?.data?.awb_code || null;
+            const fetchedCourier = s?.courier || s?.courier_name || s?.data?.courier_name || null;
+            const rawFetchedStatus = s?.status || s?.shipment_status || s?.current_status || s?.data?.shipment_status || null;
+            const mapStatus = (val) => {
+              if (val == null) return null;
+              if (typeof val === 'number') return (typeof SHIPROCKET_STATUS_MAP !== 'undefined' && SHIPROCKET_STATUS_MAP[val]) ? SHIPROCKET_STATUS_MAP[val] : String(val);
+              if (typeof val === 'string' && /^\d+$/.test(val)) {
+                const n = Number(val);
+                return (typeof SHIPROCKET_STATUS_MAP !== 'undefined' && SHIPROCKET_STATUS_MAP[n]) ? SHIPROCKET_STATUS_MAP[n] : val;
+              }
+              return val;
+            };
+            const fetchedStatus = mapStatus(rawFetchedStatus);
+            const fetchedPickup = s?.pickup_status || s?.data?.pickup_status || null;
+            const fetchedManifest = s?.manifest_status || s?.data?.manifest_status || null;
+            const fetchedTrackUrl = s?.track_url || s?.tracking_url || s?.data?.tracking_url || null;
+
+            const updates = {};
+            if (fetchedAwb && fetchedAwb !== row.shiprocket_awb) updates.shiprocket_awb = fetchedAwb;
+            if (fetchedCourier && fetchedCourier !== row.shiprocket_courier) updates.shiprocket_courier = fetchedCourier;
+            if (fetchedTrackUrl && fetchedTrackUrl !== row.shiprocket_track_url) updates.shiprocket_track_url = fetchedTrackUrl;
+            if (fetchedStatus && String(fetchedStatus).toLowerCase() !== String(row.shiprocket_status || '').toLowerCase()) updates.shiprocket_status = fetchedStatus;
+            if (fetchedPickup) updates.shiprocket_pickup_status = fetchedPickup;
+            if (fetchedManifest) updates.shiprocket_manifest_status = fetchedManifest;
+
+            if (Object.keys(updates).length) {
+              try {
+                const { filtered, error: filterErr } = await filterUpdatesToExisting(row.id, updates);
+                if (filterErr) {
+                  console.error('[shiprocket-actions] sync_shipment: failed to fetch existing row for filtering', filterErr);
+                  recordError(oid, filterErr.message || filterErr);
+                } else if (!filtered || Object.keys(filtered).length === 0) {
+                  console.log('[shiprocket-actions] sync_shipment: no valid columns to update after filtering for oid', oid);
+                  skip(oid, 'no valid columns to update');
+                } else {
+                  const { data: upData, error: upErr } = await supabase.from('orders').update(filtered).eq('id', row.id).select();
+                  if (upErr) {
+                    console.error('[shiprocket-actions] sync_shipment: DB update failed for oid', oid, upErr);
+                    recordError(oid, upErr.message || upErr);
+                  } else {
+                    recordSuccess(oid, { updated: Object.keys(filtered), db: Array.isArray(upData) && upData.length ? upData[0] : upData });
+                  }
+                }
+              } catch (e) { recordError(oid, e.message || e); }
+            } else {
+              skip(oid, 'no shipment changes');
+            }
+          } catch (e) { recordError(oid, e.message || e); }
+        } else if (action === 'sync_tracking') {
+          // Sync tracking events and status; append new scans only
+          if (!row.shiprocket_order_id && !row.shiprocket_awb) { skip(oid, 'no order_id or awb'); continue; }
+          try {
+            // Prefer AWB for tracking if available, otherwise fallback to order_id
+            const trackParam = row.shiprocket_awb ? { awb: String(row.shiprocket_awb) } : { order_id: String(oid) };
+            console.log('[shiprocket-actions] sync_tracking: fetching tracking with', trackParam, 'for oid', oid);
+            const tr = await getTracking(trackParam);
+            const fetched = (tr && tr.tracking_data) ? tr.tracking_data : tr;
+            const nested = (fetched && fetched.shipment_track && fetched.shipment_track[0]) ? fetched.shipment_track[0] : null;
+            const fetchedEvents = nested && Array.isArray(nested.scan_details) ? nested.scan_details : (fetched && Array.isArray(fetched.shipment_track) ? fetched.shipment_track : []);
+            const existing = Array.isArray(row.shiprocket_events) ? row.shiprocket_events : [];
+            // Normalize events to { date, activity, location }
+            const normalize = ev => {
+              if (!ev) return null;
+              const date = ev.date || ev.scan_date || ev.activity_date || ev.timestamp || ev.scanned_at || null;
+              const activity = ev.activity || ev.activity_type || ev.status || ev.activity_text || ev.message || ev.sr_status_label || ev.status_label || null;
+              const location = ev.location || ev.scan_location || ev.city || null;
+              return { date, activity, location, raw: ev };
+            };
+            const newEvents = [];
+            for (const fe of fetchedEvents || []) {
+              const n = normalize(fe);
+              if (!n || !n.date || !n.activity) continue;
+              const duplicate = existing.some(ex => String(ex.date) === String(n.date) && String((ex.activity||'')).trim() === String((n.activity||'')).trim());
+              if (!duplicate) newEvents.push(n);
+            }
+            const updates = {};
+            if (newEvents.length) {
+              updates.shiprocket_events = existing.concat(newEvents).slice(-500); // keep recent 500
+            }
+            const fetchedStatus = nested?.current_status || fetched?.shipment_status || nested?.status || null;
+            if (fetchedStatus) {
+              const cur = row.shiprocket_status || '';
+              let shouldUpdate = false;
+              if (typeof isProgressionAllowed === 'function') {
+                shouldUpdate = isProgressionAllowed(String(cur), String(fetchedStatus));
+              } else {
+                shouldUpdate = String(fetchedStatus).toLowerCase() !== String(cur).toLowerCase();
+              }
+              if (shouldUpdate) updates.shiprocket_status = fetchedStatus;
+            }
+            if (Object.keys(updates).length) {
+              try {
+                const { filtered, error: filterErr } = await filterUpdatesToExisting(row.id, updates);
+                if (filterErr) {
+                  console.error('[shiprocket-actions] sync_tracking: failed to fetch existing row for filtering', filterErr);
+                  recordError(oid, filterErr.message || filterErr);
+                } else if (!filtered || Object.keys(filtered).length === 0) {
+                  console.log('[shiprocket-actions] sync_tracking: no valid columns to update after filtering for oid', oid);
+                  skip(oid, 'no valid columns to update');
+                } else {
+                  const { data: upData, error: upErr } = await supabase.from('orders').update(filtered).eq('id', row.id).select();
+                  if (upErr) {
+                    console.error('[shiprocket-actions] sync_tracking: DB update failed for oid', oid, upErr);
+                    recordError(oid, upErr.message || upErr);
+                  } else {
+                    recordSuccess(oid, { appended: newEvents.length, updatedStatus: !!filtered.shiprocket_status, db: Array.isArray(upData) && upData.length ? upData[0] : upData });
+                  }
+                }
+              } catch (e) { recordError(oid, e.message || e); }
+            } else {
+              skip(oid, 'no new tracking data');
+            }
+          } catch (e) { recordError(oid, e.message || e); }
+        } else if (action === 'cancel') {
+          // Cancel: allow cancelling at any stage (server will attempt Shiprocket cancel)
+          try {
+            const cr = await cancelOrders([oid]);
+            // Update DB row to mark as cancelled so UI reflects change immediately
+            try {
+              await supabase.from('orders').update({ shiprocket_status: 'Cancelled' }).eq('id', row.id);
+            } catch (dbErr) {
+              console.error('Failed to update order status to Cancelled for', oid, dbErr);
+            }
+            recordSuccess(oid, { raw: cr });
+          } catch (e) { recordError(oid, e.message || e); }
+        } else if (action === 'generate_manifest') {
+          // Manifest generation is not implemented in this integration
+          skip(oid, 'manifest generation not implemented');
+        } else {
+          return res.status(400).json({ error: 'unknown action' });
+        }
+      } catch (err) {
+        recordError(oid, err.message || err);
+      }
+    }
+
+    // For bulk cancel, etc. we have already performed per-id calls; could improve batching later
+    // Log results server-side
+    console.log('shiprocket-actions results:', JSON.stringify(results));
+    return res.status(200).json(results);
+  } catch (err) {
+    console.error('shiprocket-actions failed', err);
+    return res.status(500).json({ error: 'Action processing failed' });
+  }
+});
+
+// Delete one or more orders by DB id
+app.post('/api/orders/delete', async (req, res) => {
+  const { ids } = req.body || {};
+  if (!ids || !Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids required (array of DB order ids)' });
+  try {
+    const { error } = await supabase.from('orders').delete().in('id', ids);
+    if (error) {
+      console.error('Failed to delete orders', error);
+      return res.status(500).json({ error: 'DB delete failed' });
+    }
+    return res.status(200).json({ deleted: ids.length });
+  } catch (err) {
+    console.error('orders/delete failed', err);
+    return res.status(500).json({ error: 'orders/delete failed' });
   }
 });
 
@@ -867,9 +1232,14 @@ const PORT = process.env.PORT || 5000;
     createShipment = sr.createShipment;
     downloadInvoice = sr.downloadInvoice;
     printAndDownloadInvoice = sr.printAndDownloadInvoice;
+    fetchInvoiceUrlRaw = sr.fetchInvoiceUrlRaw;
     getTracking = sr.getTracking;
     generateAWB = sr.generateAWB;
+    getLabel = sr.getLabel;
+    cancelOrders = sr.cancelOrders;
     getShipmentStatus = sr.getShipmentStatus;
+    getOrderDetails = sr.getOrderDetails;
+    getShipmentDetails = sr.getShipmentDetails;
     console.log('shiprocketService loaded');
 
     // Load normalizer helpers (ESM) for progression checks
@@ -881,6 +1251,19 @@ const PORT = process.env.PORT || 5000;
       console.log('shiprocket-normalizer loaded');
     } catch (e) {
       console.warn('Failed to load shiprocket-normalizer in server.cjs:', e?.message || e);
+    }
+
+    // Try to load the richer external webhook handler (ESM). If it loads,
+    // route webhook requests to it; otherwise continue using the built-in
+    // `logisticsWebhookHandler` defined in this file.
+    try {
+      const wh = await import('./api/shiprocket-webhook.js');
+      if (wh && (wh.default || typeof wh === 'function')) {
+        externalWebhookHandler = wh.default || wh;
+        console.log('External shiprocket-webhook handler loaded and will be used');
+      }
+    } catch (e) {
+      console.warn('External shiprocket-webhook handler not available:', e?.message || e);
     }
 
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
@@ -975,3 +1358,188 @@ const SHIPROCKET_STATUS_MAP = {
   89: 'ISSUE_RELATED_TO_THE_RECIPIENT',
   90: 'REACHED_BACK_AT_SELLER_CITY'
 };
+
+// Cancel a Shiprocket order by internal order id (server-side)
+app.post('/api/shiprocket-cancel-order', async (req, res) => {
+  try {
+    const { order_id } = req.body || {};
+    if (!order_id) return res.status(400).json({ error: 'order_id required' });
+    // Fetch order to find shiprocket identifiers
+    const { data: rows, error: fetchErr } = await supabase.from('orders').select('id, order_code, shiprocket_order_id, shiprocket_awb').eq('id', order_id).limit(1);
+    if (fetchErr) return res.status(500).json({ error: 'DB lookup failed', details: fetchErr });
+    const order = Array.isArray(rows) && rows.length ? rows[0] : null;
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    // Disallow cancelling after AWB assigned
+    if (order.shiprocket_awb) {
+      return res.status(400).json({ error: 'Cannot cancel after AWB assignment' });
+    }
+
+    // Need Shiprocket numeric order id to cancel
+    const srOrderId = order.shiprocket_order_id;
+    if (!srOrderId) return res.status(400).json({ error: 'Shiprocket order id missing; cannot cancel via Shiprocket' });
+
+    // Call Shiprocket cancel API
+    try {
+      const result = await cancelOrders([Number(srOrderId)]);
+      // Determine cancellation metadata: prefer explicit values from caller (reason/comment/cancelled_by)
+      const body = req.body || {};
+      const providedReason = body.reason || body.cancel_reason || null;
+      const providedComment = body.comment || body.cancel_comment || null;
+      const providedBy = body.cancelled_by || (providedReason ? 'user' : 'admin');
+      const cancelReasonFinal = providedReason || (providedBy === 'admin' ? 'Cancelled by Admin' : null);
+      const cancelCommentFinal = providedComment || null;
+      const cancelledAt = new Date().toISOString();
+
+      // On success, update local order_status to cancelled and write metadata
+      const { data: updData, error: updErr } = await supabase.from('orders').update({
+        order_status: 'cancelled',
+        shiprocket_status: 'Canceled',
+        cancelled_by: providedBy,
+        cancel_reason: cancelReasonFinal,
+        cancel_comment: cancelCommentFinal,
+        cancelled_at: cancelledAt,
+      }).eq('id', order.id).select();
+      if (updErr) {
+        console.error('Failed to write cancellation metadata to DB', updErr);
+        // Return success for Shiprocket cancel but include DB write error details
+        return res.status(200).json({ success: true, result, db_update_error: String(updErr) });
+      }
+      return res.json({ success: true, result, updated: updData });
+    } catch (e) {
+      console.error('Shiprocket cancel failed', e?.message || e);
+      return res.status(502).json({ error: 'Shiprocket cancel failed', details: e?.message || e });
+    }
+  } catch (err) {
+    console.error('shiprocket-cancel-order exception', err);
+    return res.status(500).json({ error: err?.message || err });
+  }
+});
+
+// Admin: suspend (permanently delete) a user and their profile/avatar.
+// Protect with a header `x-admin-secret` matching ADMIN_API_SECRET env var.
+app.post('/api/admin/suspend-user', async (req, res) => {
+  try {
+    // Role-based admin check: require Authorization: Bearer <access_token>
+    const authHeader = req.headers.authorization || req.headers.Authorization || null;
+    if (!authHeader || !authHeader.toLowerCase().startsWith('bearer ')) {
+      return res.status(401).json({ error: 'Authorization Bearer token required' });
+    }
+    const token = authHeader.split(' ')[1];
+    // Try to resolve the requesting user from the provided access token
+    let requesterId = null;
+    try {
+      let gu = null;
+      try { gu = await supabase.auth.getUser(token); } catch (e) { gu = await supabase.auth.getUser({ access_token: token }); }
+      requesterId = gu?.data?.user?.id || gu?.user?.id || null;
+    } catch (e) {
+      console.warn('suspend-user: failed to resolve user from token', e?.message || e);
+    }
+    if (!requesterId) return res.status(401).json({ error: 'Invalid or expired token' });
+
+    // Ensure requester is admin according to profiles.role
+    const { data: reqProfile, error: reqProfileErr } = await supabase.from('profiles').select('role').eq('id', requesterId).maybeSingle();
+    if (reqProfileErr) return res.status(500).json({ error: 'Failed to verify admin role', details: reqProfileErr.message || reqProfileErr });
+    const role = reqProfile?.role || null;
+    if (!role || !['admin', 'superadmin', 'administrator'].includes(String(role).toLowerCase())) {
+      return res.status(403).json({ error: 'Insufficient privileges' });
+    }
+
+    const { id } = req.body || {};
+    if (!id) return res.status(400).json({ error: 'id required (profiles.id)' });
+
+    // Fetch profile
+    const { data: profile, error: fetchErr } = await supabase.from('profiles').select('*').eq('id', id).maybeSingle();
+    if (fetchErr) return res.status(500).json({ error: 'Failed to fetch profile', details: fetchErr.message || fetchErr });
+    if (!profile) return res.status(404).json({ error: 'Profile not found' });
+
+    const result = { id, steps: {} };
+
+    // 1) Delete user from Supabase Auth (service-role)
+    try {
+      const authUid = profile.id || profile.user_id;
+      if (authUid) {
+        const { error: delAuthErr } = await supabase.auth.admin.deleteUser(authUid);
+        if (delAuthErr) {
+          // Build a best-effort message from common error shapes
+          const parts = [];
+          if (delAuthErr.message) parts.push(delAuthErr.message);
+          if (delAuthErr.error) parts.push(delAuthErr.error);
+          if (delAuthErr.details) parts.push(delAuthErr.details);
+          if (delAuthErr.msg) parts.push(delAuthErr.msg);
+          try { parts.push(JSON.stringify(delAuthErr)); } catch (e) { /* ignore */ }
+          const msg = parts.filter(Boolean).join(' | ') || String(delAuthErr);
+          const lower = String(msg).toLowerCase();
+          // Treat any "not found" / 404-style responses as non-fatal (already-deleted)
+          const isNotFound = lower.includes('user not found') || lower.includes('not found') || lower.includes('no user') || lower.includes('does not exist') || (delAuthErr && delAuthErr.status === 404);
+          if (isNotFound) {
+            console.warn('suspend-user: auth user not found or already deleted, continuing', msg);
+            result.steps.deleteAuth = { ok: false, warning: 'auth user not found or already deleted', details: msg };
+          } else {
+            result.steps.deleteAuth = { ok: false, error: msg };
+            return res.status(502).json({ error: 'Failed to delete auth user', details: msg });
+          }
+        } else {
+          result.steps.deleteAuth = { ok: true };
+        }
+      } else {
+        result.steps.deleteAuth = { ok: false, warning: 'no auth uid found on profile' };
+      }
+    } catch (e) {
+      console.error('suspend-user: auth delete error', e);
+      return res.status(502).json({ error: 'Failed to delete auth user', details: e?.message || e });
+    }
+
+    // 2) Delete avatar from storage if we can derive a path
+    try {
+      const avatarUrl = profile.avatar_url || profile.avatar || profile.avatar_path || null;
+      if (avatarUrl && typeof avatarUrl === 'string') {
+        // Try to extract path after '/avatars/' if public URL format used
+        const m = avatarUrl.match(/\/avatars\/(.+)$/);
+        const path = m ? m[1] : null;
+        if (path) {
+          try {
+            const { error: remErr } = await supabase.storage.from('avatars').remove([path]);
+            if (remErr) {
+              console.warn('suspend-user: failed to remove avatar', remErr);
+              result.steps.deleteAvatar = { ok: false, error: remErr.message || remErr };
+            } else {
+              result.steps.deleteAvatar = { ok: true };
+            }
+          } catch (re) {
+            console.warn('suspend-user: storage remove exception', re);
+            result.steps.deleteAvatar = { ok: false, error: re?.message || re };
+          }
+        } else {
+          result.steps.deleteAvatar = { ok: false, warning: 'could not derive storage path from avatar_url' };
+        }
+      } else {
+        result.steps.deleteAvatar = { ok: false, warning: 'no avatar_url present' };
+      }
+    } catch (e) {
+      console.warn('suspend-user: avatar removal failed', e);
+      result.steps.deleteAvatar = { ok: false, error: e?.message || e };
+    }
+
+    // 3) Delete profile row from DB
+    try {
+      const { error: delProfileErr } = await supabase.from('profiles').delete().eq('id', id);
+      if (delProfileErr) {
+        console.error('suspend-user: failed to delete profile', delProfileErr);
+        result.steps.deleteProfile = { ok: false, error: delProfileErr.message || delProfileErr };
+        return res.status(500).json({ error: 'Failed to delete profile', details: delProfileErr.message || delProfileErr, steps: result.steps });
+      }
+      result.steps.deleteProfile = { ok: true };
+    } catch (e) {
+      console.error('suspend-user: delete profile exception', e);
+      return res.status(500).json({ error: 'Failed to delete profile', details: e?.message || e, steps: result.steps });
+    }
+
+    // 4) Optionally: remove other related rows (quotes, orders) -- left to background jobs or separate API
+
+    return res.status(200).json({ ok: true, steps: result.steps });
+  } catch (err) {
+    console.error('admin suspend-user exception', err);
+    return res.status(500).json({ error: err?.message || err });
+  }
+});

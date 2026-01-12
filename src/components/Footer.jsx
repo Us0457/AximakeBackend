@@ -9,7 +9,7 @@ const Footer = () => {
     <footer className="w-full">
       {/* Live Support Strip */}
       <div className="w-full bg-gradient-to-r from-sky-50 to-slate-100">
-        <div className="container mx-auto px-4 py-4">
+        <div className="container mx-auto px-2 sm:px-4 lg:px-6 py-4">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <Headphones className="w-6 h-6 text-sky-700" />
@@ -28,7 +28,7 @@ const Footer = () => {
 
       {/* Main Footer Grid */}
       <div className="bg-gradient-to-b from-white/95 to-neutral-200/95 border-t border-slate-200">
-        <div className="container mx-auto px-4 py-10 md:py-12">
+        <div className="container mx-auto px-4 sm:px-6 lg:px-6 py-10 md:py-12">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
             {/* Column 1 - Brand */}
             <div>
@@ -104,7 +104,7 @@ const Footer = () => {
 
       {/* Bottom dark bar */}
       <div className="w-full bg-slate-900 text-white">
-        <div className="container mx-auto px-4 py-3 text-center text-sm">
+        <div className="container mx-auto px-2 sm:px-4 lg:px-6 py-3 text-center text-sm">
           <div>&copy; {currentYear} Aximake. All rights reserved. <span className="hidden sm:inline">• Made in India 🇮🇳</span></div>
         </div>
       </div>

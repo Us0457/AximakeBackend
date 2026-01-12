@@ -79,7 +79,7 @@ const SupportForumPage = () => {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-5xl">
+    <div className="container mx-auto px-2 sm:px-4 lg:px-6 py-8 max-w-5xl">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-3xl font-bold text-primary">Tech Support Forum</h1>
         <div className="text-sm text-muted-foreground">Ask questions, get help from the community and official Aximake guidance.</div>

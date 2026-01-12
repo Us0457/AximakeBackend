@@ -19,13 +19,21 @@ import React, { useState, useEffect, useRef } from 'react';
     };
     const FIXED_CHARGE = 20;
     const MIN_PRICE = 50;
+    // Print quality multipliers (adjustable)
+    const PRINT_QUALITY_MULTIPLIERS = {
+      'Standard (Recommended)': 1.0,
+      'High Quality': 1.15,
+      'Ultra Fine': 1.30,
+    };
 
     const CustomPrintPage = () => {
       const [fileName, setFileName] = useState('');
       const [modelUrl, setModelUrl] = useState(null);
       const [modelData, setModelData] = useState(null);
+      const [rawFile, setRawFile] = useState(null); // keep original File for non-STL uploads
       const [material, setMaterial] = useState('pla');
       const [color, setColor] = useState('#8A2BE2');
+      const [printQuality, setPrintQuality] = useState('');
       const [infill, setInfill] = useState(20);
       const [price, setPrice] = useState(0);
       const [isLoading, setIsLoading] = useState(false);
@@ -72,7 +80,13 @@ import React, { useState, useEffect, useRef } from 'react';
           return;
         }
         if (file) {
-          if (file.name.toLowerCase().endsWith('.stl')) {
+          // Allowlist of supported CAD file extensions (additive only)
+          const ALLOWED = ['.stl', '.step', '.stp', '.iges', '.igs', '.obj', '.3mf', '.f3d', '.sldprt'];
+          const name = (file.name || '').toLowerCase();
+          const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+          setRawFile(file); // always keep original file for upload
+
+          if (ext === '.stl') {
             setFileName(file.name);
             setIsLoading(true);
             
@@ -97,11 +111,23 @@ import React, { useState, useEffect, useRef } from 'react';
             }
             arrayBufferReader.readAsArrayBuffer(file);
 
+          } else if (ALLOWED.includes(ext)) {
+            // Accept other CAD formats for upload. We do NOT attempt to preview them client-side
+            // to avoid touching existing STL preview/validation logic. These files will be uploaded
+            // and may be flagged for manual review by the team if downstream processing doesn't
+            // support the format automatically.
+            setFileName(file.name);
+            setModelUrl(null);
+            setModelData(null);
+            setIsLoading(false);
+            toast({ title: 'File Accepted', description: 'This CAD format is accepted. Preview may be unavailable and it may be flagged for manual review.', variant: 'default' });
           } else {
-            toast({ title: "Invalid File", description: "Please upload a valid .STL file.", variant: "destructive" });
+            // Unknown/unsupported extension — friendly error and leave existing behavior intact
+            toast({ title: "Unsupported File", description: "This file format is not supported at the moment. Please upload a supported CAD file.", variant: "destructive" });
             setFileName('');
             setModelUrl(null);
             setModelData(null);
+            setRawFile(null);
           }
         }
       };
@@ -118,14 +144,25 @@ import React, { useState, useEffect, useRef } from 'react';
           navigate('/auth');
           return;
         }
-        // Upload STL file to Supabase Storage
-        const file = new File([modelData], fileName, { type: 'application/sla' });
-        const { data: uploadData, error: uploadError } = await supabase.storage.from('stl-files').upload(`${user.id}/${Date.now()}_${fileName}`, file);
+        // Prepare upload file. Preserve existing STL flow (preview-derived modelData) unchanged.
+        // For non-STL uploads we use the original `rawFile` captured earlier.
+        let uploadFile = null;
+        if (modelData && fileName.toLowerCase().endsWith('.stl')) {
+          uploadFile = new File([modelData], fileName, { type: 'application/sla' });
+        } else if (rawFile) {
+          uploadFile = rawFile;
+        } else {
+          toast({ title: 'Upload Error', description: 'No file data available for upload.', variant: 'destructive' });
+          return;
+        }
+        const { data: uploadData, error: uploadError } = await supabase.storage.from('stl-files').upload(`${user.id}/${Date.now()}_${fileName}`, uploadFile);
         if (uploadError) {
           toast({ title: 'Upload Error', description: uploadError.message, variant: 'destructive' });
           return;
         }
         const file_url = uploadData?.path || null;
+        // Ensure print_quality has a safe default
+        const pq = printQuality || 'Standard';
         // Save quote to Supabase DB
         const { error: insertError } = await supabase.from('quotes').insert([
           {
@@ -135,6 +172,7 @@ import React, { useState, useEffect, useRef } from 'react';
             material,
             color,
             infill,
+            print_quality: pq,
             price,
             created_at: new Date().toISOString(),
           },
@@ -152,14 +190,25 @@ import React, { useState, useEffect, useRef } from 'react';
           navigate('/auth');
           return;
         }
-        // Upload STL file to Supabase Storage
-        const file = new File([modelData], fileName, { type: 'application/sla' });
-        const { data: uploadData, error: uploadError } = await supabase.storage.from('stl-files').upload(`${user.id}/${Date.now()}_${fileName}`, file);
+        // Prepare upload file. Preserve existing STL flow (preview-derived modelData) unchanged.
+        // For non-STL uploads we use the original `rawFile` captured earlier.
+        let uploadFile = null;
+        if (modelData && fileName.toLowerCase().endsWith('.stl')) {
+          uploadFile = new File([modelData], fileName, { type: 'application/sla' });
+        } else if (rawFile) {
+          uploadFile = rawFile;
+        } else {
+          toast({ title: 'Upload Error', description: 'No file data available for upload.', variant: 'destructive' });
+          return;
+        }
+        const { data: uploadData, error: uploadError } = await supabase.storage.from('stl-files').upload(`${user.id}/${Date.now()}_${fileName}`, uploadFile);
         if (uploadError) {
           toast({ title: 'Upload Error', description: uploadError.message, variant: 'destructive' });
           return;
         }
         const file_url = uploadData?.path || null;
+        // Ensure print_quality has a safe default
+        const pq = printQuality || 'Standard';
         // Save to cart_items table (not quotes)
         const { error: insertError } = await supabase.from('cart_items').insert([
           {
@@ -169,6 +218,7 @@ import React, { useState, useEffect, useRef } from 'react';
             material,
             color,
             infill,
+            print_quality: pq,
             price,
             created_at: new Date().toISOString(),
             quantity: 1,
@@ -192,7 +242,7 @@ import React, { useState, useEffect, useRef } from 'react';
 
         // Pricing constants
         const BASE_CHARGE = 50; // ₹50 per order
-        const BBOX_COST_PER_CM3 = 0.2; // ₹0.2 per cm³ (optional)
+        const BBOX_COST_PER_CM3 = 2; // ₹0.2 per cm³ (optional)
         const SUPPORT_CHARGE = 20; // Flat ₹20
         // Use admin-configured unit price for selected material
         const selectedPriceObj = Array.isArray(priceConfigs) ? priceConfigs.find(p => p && p.name === material) : undefined;
@@ -210,9 +260,14 @@ import React, { useState, useEffect, useRef } from 'react';
           (unitPrice * volumeCm3) +
           (BBOX_COST_PER_CM3 * bboxVolumeCm3) +
           SUPPORT_CHARGE;
+
+        // Apply print quality multiplier (apply after base price computed)
+        const multiplier = PRINT_QUALITY_MULTIPLIERS[printQuality] || 1.0;
+        calculatedPrice = calculatedPrice * multiplier;
+
         if (calculatedPrice < MIN_PRICE) calculatedPrice = MIN_PRICE;
         setPrice(Number(calculatedPrice.toFixed(2)));
-      }, [material, infill, modelStats?.volume, modelStats?.dimensions, priceConfigs]);
+      }, [material, infill, modelStats?.volume, modelStats?.dimensions, priceConfigs, printQuality]);
 
       useEffect(() => {
         // If modelData is cleared (e.g., new file upload or error), also clear modelStats
@@ -227,7 +282,7 @@ import React, { useState, useEffect, useRef } from 'react';
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -20 }}
           transition={{ duration: 0.5 }}
-          className="container mx-auto px-2 py-4 sm:px-4 sm:py-8 scale-95 sm:scale-100"
+          className="container mx-auto px-2 sm:px-4 lg:px-6 py-4 sm:py-8 scale-95 sm:scale-100"
         >
           <h1 className="text-2xl sm:text-4xl font-bold mb-3 sm:mb-6 text-center gradient-text">Create Your Custom 3D Print</h1>
           <p className="text-base sm:text-lg text-muted-foreground mb-4 sm:mb-8 text-center max-w-2xl mx-auto">
@@ -246,12 +301,37 @@ import React, { useState, useEffect, useRef } from 'react';
                   isUserLoggedIn={!!user}
                   onRequireLogin={() => navigate('/auth')}
                 />
-                <ModelViewer 
-                  modelData={modelData} 
-                  modelColor={color} 
-                  onError={handleViewerError}
-                  onStats={setModelStats}
-                />
+                <div className="relative">
+                  <ModelViewer 
+                    modelData={modelData} 
+                    modelColor={color} 
+                    onError={handleViewerError}
+                    onStats={setModelStats}
+                  />
+
+                  {/* Info icon + tooltip (non-intrusive) */}
+                  <div className="absolute top-2 right-2 flex items-center">
+                    <div className="group relative">
+                      <button
+                        type="button"
+                        aria-label="Model viewer help"
+                        className="w-7 h-7 rounded-full bg-white/90 border border-gray-200 text-gray-700 flex items-center justify-center text-xs shadow-sm hover:bg-white"
+                        onClick={(e) => { e.stopPropagation(); /* no-op: tooltip shown on hover/focus too */ }}
+                      >
+                        ⓘ
+                      </button>
+                      <div className="pointer-events-none opacity-0 group-hover:opacity-100 group-focus:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150 absolute right-0 mt-2 w-64 bg-background border border-border text-sm text-muted-foreground p-2 rounded shadow-lg z-50" style={{ transform: 'translateY(6px)' }}>
+                        <div className="text-sm text-muted-foreground leading-snug">
+                          <div>Click and drag to rotate the model</div>
+                          <div>Scroll to zoom in or zoom out</div>
+                          <div>On touch devices, use pinch and drag to interact</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {/* Color/preview disclaimer */}
+                <div className="mt-2 text-xs text-muted-foreground">Note: The color shown in the 3D preview may not exactly represent the final printed color.</div>
               </CardContent>
             </Card>
             <Card className="bg-card/70 backdrop-blur-sm shadow-xl border-accent/20 sticky top-24">
@@ -268,6 +348,8 @@ import React, { useState, useEffect, useRef } from 'react';
                   colors={colorOptions}
                   infill={infill}
                   setInfill={setInfill}
+                  printQuality={printQuality}
+                  setPrintQuality={setPrintQuality}
                 />
                 <PriceDisplay price={price} />
                 <div className="flex flex-col gap-2 sm:gap-3">

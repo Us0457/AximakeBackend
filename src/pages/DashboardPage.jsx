@@ -180,7 +180,7 @@ import { supabase } from '../lib/supabaseClient';
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -20 }}
           transition={{ duration: 0.3 }}
-          className="container mx-auto px-4 py-0 min-h-[calc(100vh-6rem)] flex flex-col items-center"
+          className="container mx-auto px-2 sm:px-4 lg:px-6 py-0 min-h-[calc(100vh-6rem)] flex flex-col items-center"
         >
           <style>
             @media (max-width: 520px) {'{'}

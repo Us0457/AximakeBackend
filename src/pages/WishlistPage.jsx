@@ -123,7 +123,7 @@ const WishlistPage = () => {
   if (loading) return <div className="flex justify-center items-center min-h-[60vh]">Loading...</div>;
 
   return (
-    <div className="container mx-auto py-0 px-2 sm:px-4">
+    <div className="container mx-auto py-0 px-2 sm:px-4 lg:px-6">
       <h1 className="text-3xl font-bold mb-8 gradient-text text-center">Your Wishlist</h1>  
           {loading ? (
             <div className="text-center text-muted-foreground py-12">Loading...</div>

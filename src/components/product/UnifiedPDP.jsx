@@ -97,7 +97,7 @@ export default function UnifiedPDP({ productId }) {
   const savePct = showMRP ? Math.round(((mrpNum - priceNum) / mrpNum) * 100) : 0;
 
   return (
-    <div className="container mx-auto px-3 sm:px-4 py-3 max-w-6xl">
+    <div className="container mx-auto px-2 sm:px-4 lg:px-6 py-3 max-w-6xl">
       {/* PDP breadcrumb: always data-driven from product canonical category
           Structure: Home > All Products > Category Name > Product Name
       */}

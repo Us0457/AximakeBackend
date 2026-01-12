@@ -22,7 +22,7 @@ const UserOrdersPage = () => {
   const { user } = useAuth();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedOrder, setSelectedOrder] = useState(null);
+  // modal and cancel state moved to dedicated Order Details page
   const [liveStatuses, setLiveStatuses] = useState({}); // { shipment_id: { status, track_url } }
   const navigate = useNavigate();
 
@@ -31,20 +31,20 @@ const UserOrdersPage = () => {
     document.title = 'Your Orders — Aximake';
   }, []);
 
-  useEffect(() => {
-    const fetchOrders = async () => {
-      if (!user) return;
-      setLoading(true);
-      const { data, error } = await supabase
-        .from('orders')
-        .select('id, user_id, created_at, price, order_status, items, address, order_code, discount_amount, total, shiprocket_shipment_id, shiprocket_awb, shiprocket_status, shiprocket_label_url, shiprocket_events')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-      if (!error) setOrders(data || []);
-      setLoading(false);
-    };
-    fetchOrders();
-  }, [user]);
+  // Load orders helper (used by other actions)
+  async function loadOrders() {
+    if (!user) return;
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('orders')
+      .select('id, user_id, created_at, price, order_status, items, address, order_code, discount_amount, total, shiprocket_shipment_id, shiprocket_awb, shiprocket_status, shiprocket_label_url, shiprocket_events')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+    if (!error) setOrders(data || []);
+    setLoading(false);
+  }
+
+  useEffect(() => { loadOrders(); }, [user]);
 
   // SEO: title and meta for user orders
   useEffect(() => {
@@ -84,10 +84,18 @@ const UserOrdersPage = () => {
     try {
       // Use query parameter for shipment_id
       const res = await fetch(getApiUrl(`/api/shiprocket-invoice?shipment_id=${order.shiprocket_shipment_id}`));
-      if (!res.ok) throw new Error('Failed to get invoice URL');
-      const data = await res.json();
-      if (!data.invoice_url) throw new Error('No invoice_url returned');
-      // Open invoice_url in a new tab (or trigger download)
+      let data = null;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const msg = data?.error || data?.message || data?.details || 'Invoice not available yet';
+        alert('Invoice not available: ' + msg);
+        return;
+      }
+      if (!data || !data.invoice_url) {
+        alert('Invoice is not available yet. Please try again later.');
+        return;
+      }
       window.open(data.invoice_url, '_blank');
       // Refresh orders after download
       if (typeof fetchOrders === 'function') await fetchOrders();
@@ -95,6 +103,20 @@ const UserOrdersPage = () => {
       alert('Failed to download invoice: ' + (e?.message || e));
     }
   }
+
+  function isOrderCancelable(order) {
+    // Cancel allowed only if no AWB and status is before 'Ready To Ship'
+    const awb = order.shiprocket_awb && String(order.shiprocket_awb).trim();
+    if (awb) return false;
+    const fallback = order.shiprocket_status || order.order_status || 'pending';
+    const displayStatus = getLatestScanLabel(order.shiprocket_events, fallback);
+    const cur = String(displayStatus || '').toLowerCase();
+    // Disallow once status reaches ready/shipped/picked or final states
+    const blocked = ['ready to ship', 'ready', 'shipped', 'picked', 'picked up', 'delivered', 'cancel', 'return', 'fulfilled'];
+    return !blocked.some(b => cur.includes(b));
+  }
+
+  // Cancellation flow moved to OrderDetailsPage; modal/state removed from this list view.
 
   // Fetch and update order status from Shiprocket
   const fetchAndUpdateOrderStatus = async (order) => {
@@ -121,7 +143,7 @@ const UserOrdersPage = () => {
   };
 
   return (
-    <div className="container mx-auto px-4 py-10 max-w-3xl">
+    <div className="container mx-auto px-2 sm:px-4 lg:px-6 py-10 max-w-3xl">
       <div className="flex items-center gap-3 mb-8">
         <ClipboardList className="h-8 w-8 text-primary" />
         <h1 className="text-3xl font-bold text-primary">Your Orders</h1>
@@ -135,13 +157,13 @@ const UserOrdersPage = () => {
           {orders.map(order => {
             const live = order.shiprocket_shipment_id ? liveStatuses[order.shiprocket_shipment_id] : null;
             return (
-              <Card
+                <Card
                 key={order.id}
                 className="hover:shadow-lg transition cursor-pointer"
-                onClick={() => { setSelectedOrder(order); }}
+                onClick={() => { navigate(`/orders/${order.id}`); }}
                 role="button"
                 tabIndex={0}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setSelectedOrder(order); } }}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { navigate(`/orders/${order.id}`); } }}
               >
                 <CardHeader className="flex flex-row items-center justify-between">
                   <CardTitle>{`Order #${getOrderCode(order)}`}</CardTitle>
@@ -152,7 +174,8 @@ const UserOrdersPage = () => {
                     {(() => {
                       const fallback = live?.status || order.shiprocket_status || order.order_status || 'pending';
                       const displayStatus = getLatestScanLabel(order.shiprocket_events, fallback);
-                      return (<span>Status: <span className="font-semibold text-green-700">{displayStatus}</span></span>);
+                      const colorClass = String(displayStatus || '').toLowerCase().includes('cancel') ? 'text-red-600' : 'text-green-700';
+                      return (<span>Status: <span className={`font-semibold ${colorClass}`}>{displayStatus}</span></span>);
                     })()}
                   </div>
                   {order.shiprocket_awb && (
@@ -181,227 +204,36 @@ const UserOrdersPage = () => {
                     })()}
 
                     <div className="text-xs text-muted-foreground mt-2">Click for details</div>
-                    <button
-                    className="mt-2 px-4 py-2 bg-blue-600 text-white rounded shadow hover:bg-blue-700 transition"
-                    onClick={async e => {
-                      e.stopPropagation();
-                      await handleDownloadInvoice(order, async () => {
-                        // Refetch orders after download
-                        setLoading(true);
-                        const { data, error } = await supabase
-                          .from('orders')
-                          .select('id, user_id, created_at, price, order_status, items, address, order_code, discount_amount, total, shiprocket_shipment_id, shiprocket_awb, shiprocket_status, shiprocket_label_url')
-                          .eq('user_id', user.id)
-                          .order('created_at', { ascending: false });
-                        if (!error) setOrders(data || []);
-                        setLoading(false);
-                      });
-                    }}
-                  >
-                    Download Invoice
-                  </button>
+                      <div className="mt-2 flex items-center gap-3">
+                        <button
+                          className="px-4 py-2 bg-blue-600 text-white rounded shadow hover:bg-blue-700 transition text-sm"
+                          onClick={async e => {
+                            e.stopPropagation();
+                            await handleDownloadInvoice(order, async () => {
+                              // Refetch orders after download
+                              setLoading(true);
+                              const { data, error } = await supabase
+                                .from('orders')
+                                .select('id, user_id, created_at, price, order_status, items, address, order_code, discount_amount, total, shiprocket_shipment_id, shiprocket_awb, shiprocket_status, shiprocket_label_url')
+                                .eq('user_id', user.id)
+                                .order('created_at', { ascending: false });
+                              if (!error) setOrders(data || []);
+                              setLoading(false);
+                            });
+                          }}
+                        >
+                          Download Invoice
+                        </button>
+                        {/* Cancel button intentionally removed from card to keep list view clean.
+                            Cancellation is only available inside the order details modal. */}
+                      </div>
                 </CardContent>
               </Card>
             );
           })}
         </div>
       )}
-      {/* Modal for order details */}
-      {selectedOrder && (() => {
-        // Fetch live status for selected order
-        const live = selectedOrder.shiprocket_shipment_id ? liveStatuses[selectedOrder.shiprocket_shipment_id] : null;
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 overflow-auto">
-            <div
-              className="bg-white rounded-lg shadow-lg p-4 md:p-8 w-full max-w-4xl relative flex flex-col md:flex-row gap-4 md:gap-8 items-stretch min-h-[60vh] max-h-[90vh] overflow-y-auto"
-              style={{ boxSizing: 'border-box' }}
-            >
-              <button className="absolute top-2 right-2 text-gray-400 hover:text-primary text-2xl z-10" onClick={() => setSelectedOrder(null)} aria-label="Close order details">&times;</button>
-              {/* Left: Order Details and Items */}
-              <div className="w-full md:w-2/3 md:pr-4">
-                <h2 className="text-2xl font-bold mb-2 text-primary">Order #{getOrderCode(selectedOrder)}</h2>
-                <div className="mb-2 text-sm text-gray-500">Date: {new Date(selectedOrder.created_at).toLocaleString()}</div>
-                {(() => {
-                  // Prefer latest scan label/activity as the authoritative status when available
-                  let displayStatus = live?.status || selectedOrder.shiprocket_status || selectedOrder.order_status || 'pending';
-                  try {
-                    const evs = Array.isArray(selectedOrder.shiprocket_events) ? selectedOrder.shiprocket_events : [];
-                    if (evs.length) {
-                      const sortedEvs = evs.slice().sort((a, b) => {
-                        const da = a && a.date ? Date.parse(a.date) || 0 : 0;
-                        const db = b && b.date ? Date.parse(b.date) || 0 : 0;
-                        return db - da;
-                      });
-                      const latest = sortedEvs[0];
-                      const lbl = latest && (latest['sr-status-label'] || latest.sr_status_label || latest.activity || latest.status);
-                      if (lbl) displayStatus = String(lbl);
-                    }
-                  } catch (e) {
-                    // ignore and fall back to backend status
-                  }
-
-                  return (
-                    <>
-                      <div className="mb-2 text-sm text-gray-500">Status: <span className="font-semibold text-green-700">{displayStatus}</span></div>
-                      {/* Shipment tracker (modal) - shows progress and timeline based on scans/status */}
-                      <ShipmentTracker status={live?.status || selectedOrder.shiprocket_status} events={selectedOrder.shiprocket_events} />
-                    </>
-                  );
-                })()}
-                {/* Subtotal, Discount, Total breakdown (clean, no border, label: value) */}
-                <div className="mb-4">
-                  <div className="flex flex-col gap-1 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Subtotal:</span>
-                      <span className="font-semibold">₹{
-                        Array.isArray(selectedOrder.items) && selectedOrder.items.length > 0
-                          ? Math.round(selectedOrder.items.reduce((sum, item) => sum + ((Number(item.price) || 0) * (item.quantity || 1)), 0))
-                          : (selectedOrder.price && selectedOrder.discount_amount ? Math.round(selectedOrder.price + selectedOrder.discount_amount) : Math.round(selectedOrder.price || 0))
-                      }</span>
-                    </div>
-                    {selectedOrder.discount_amount ? (
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Discount:</span>
-                        <span className="font-semibold text-red-600">-₹{Math.round(selectedOrder.discount_amount)}</span>
-                      </div>
-                    ) : null}
-                    <div className="flex justify-between mt-1">
-                      <span className="text-gray-800 font-bold">Total:</span>
-                      <span className="font-bold text-primary">₹{
-                        typeof selectedOrder.total === 'number'
-                          ? Math.round(selectedOrder.total)
-                          : (Array.isArray(selectedOrder.items) && selectedOrder.items.length > 0
-                              ? Math.round(selectedOrder.items.reduce((sum, item) => sum + ((Number(item.price) || 0) * (item.quantity || 1)), 0) - (selectedOrder.discount_amount || 0))
-                              : Math.round(typeof selectedOrder.price === 'number' ? selectedOrder.price : (selectedOrder.total ?? (selectedOrder.price - (selectedOrder.discount_amount || 0))))
-                            )
-                      }</span>
-                    </div>
-                  </div>
-                </div>
-                {/* Download Invoice button in modal
-                <button
-                  className="mb-4 inline-block px-4 py-2 bg-blue-600 text-white rounded shadow hover:bg-blue-700 transition"
-                  onClick={async e => {
-                    e.stopPropagation();
-                    await handleDownloadInvoice(selectedOrder, async () => {
-                      setLoading(true);
-                      const { data, error } = await supabase
-                        .from('orders')
-                        .select('id, user_id, created_at, price, order_status, items, address, order_code, discount_amount, total, shiprocket_shipment_id, shiprocket_awb, shiprocket_status, shiprocket_label_url, shiprocket_events')
-                        .eq('user_id', user.id)
-                        .order('created_at', { ascending: false });
-                      if (!error) setOrders(data || []);
-                      setLoading(false);
-                    });
-                  }}
-                >
-                  Download Invoice
-                </button> */}
-                {/* Order Details */}
-                <div className="font-semibold mb-1">Order Details</div>
-                <div className="text-sm text-gray-700 space-y-3">
-                  {Array.isArray(selectedOrder.items) && selectedOrder.items.length > 0 ? (
-                    selectedOrder.items.map((item, idx) => (
-                      <div key={item.id || idx} className="border rounded p-3 bg-gray-50">
-                        <div className="font-medium mb-1">
-                          {item.product_id ? (
-                            <span className="text-indigo-700">Product: {item.name}</span>
-                          ) : (
-                            <span className="text-yellow-700">Quote: {item.file_name || item.name || 'Custom Quote'}</span>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-4 text-xs text-gray-600 mb-1">
-                          {item.category && <span>Category: <span className="font-semibold text-indigo-700">{item.category}</span></span>}
-                          {item.material && <span>Material: <span className="font-semibold text-indigo-700">{item.material}</span></span>}
-                          {item.color && (
-                            <span>Color: <span className="font-semibold text-indigo-700">
-                              {(item.color_name || (typeof item.color === 'string' && item.color.startsWith('#')))
-                                ? <>
-                                    <span className="inline-block w-4 h-4 rounded-full align-middle mr-1 border" style={{ backgroundColor: item.color, borderColor: '#ccc' }}></span>
-                                    {item.color_name || 'Custom'}
-                                  </>
-                                : item.color}
-                            </span></span>
-                          )}
-                          {item.infill && <span>Infill: <span className="font-semibold text-indigo-700">{item.infill}%</span></span>}
-                          {/* Product ID removed from UI per design */}
-                          {item.sku && <span>SKU: <span className="font-mono font-semibold text-indigo-700">{item.sku}</span></span>}
-                        </div>
-                        {/* Product description removed from order item display (UI-only change) */}
-                        <div className="flex items-center gap-4 mt-1">
-                          <span className="font-bold text-primary">Qty: {item.quantity}</span>
-                          <span className="font-bold text-primary">₹{Math.round(Number(item.price)).toLocaleString()}</span>
-                        </div>
-                        {/* Show STL file download for quotes */}
-                        {!item.product_id && item.file_url && (
-                          <div className="mt-2">
-                            <a href={item.file_url} download={item.file_name || true} className="inline-flex items-center text-blue-600 hover:underline">
-                              Download STL: {item.file_name || 'File'}
-                            </a>
-                          </div>
-                        )}
-                        {/* Show product image if available */}
-                        {item.product_id && item.images && (
-                          <div className="mt-2">
-                            {(() => {
-                              let img = Array.isArray(item.images) ? item.images[0] : (typeof item.images === 'string' && item.images.includes(',') ? item.images.split(',')[0].trim() : item.images);
-                              if (img) img = img.replace(/^[\[\"]+|[\]\"]+$/g, '').replace(/['{}]/g, '').trim();
-                              // Remove any leading/trailing brackets or quotes
-                              if (img && !/^https?:\/\//i.test(img)) {
-                                const supabaseBaseUrl = 'https://wruysjrqadlsljnkmnte.supabase.co/storage/v1/object/public/product-images/';
-                                if (img.startsWith('products/')) {
-                                  img = supabaseBaseUrl + img.replace(/^products\//, 'products/');
-                                } else {
-                                  img = supabaseBaseUrl + img;
-                                }
-                              }
-                              return <img src={img} alt={item.name} className="w-24 h-24 object-cover rounded border" onError={e => { e.target.onerror = null; e.target.src = 'https://images.unsplash.com/photo-1585592049294-8f466326930a'; }} />;
-                            })()}
-                          </div>
-                        )}
-                        {/* Write a Product Review button for delivered products */}
-                        {(selectedOrder.order_status || '').toLowerCase() === 'delivered' && item.product_id && (!item.review) && (
-                          <button
-                            className="mt-3 px-4 py-2 bg-blue-600 text-white rounded shadow hover:bg-blue-700 transition"
-                            onClick={e => { e.stopPropagation(); navigate(`/review/${selectedOrder.id}/${item.product_id}`); }}
-                          >
-                            Write a Product Review
-                          </button>
-                        )}
-                      </div>
-                    ))
-                  ) : (
-                    <div>No items found in this order.</div>
-                  )}
-                </div>
-              </div>
-              {/* Right: Address and Payment Info */}
-              <div className="w-full md:w-1/3 md:pl-4 flex flex-col gap-6 mt-6 md:mt-0">
-                <div className="border rounded-lg p-4 bg-gray-50">
-                  <div className="font-semibold mb-2 text-primary">Delivery Address</div>
-                  {selectedOrder.address ? (
-                    <div className="text-sm text-gray-700 space-y-1">
-                      {selectedOrder.address.name && (
-                        <div className="font-semibold">{selectedOrder.address.name}</div>
-                      )}
-                      <div>{selectedOrder.address.flat_no}, {selectedOrder.address.area}</div>
-                      <div>{selectedOrder.address.city}, {selectedOrder.address.state} - {selectedOrder.address.pincode}</div>
-                      <div>Phone: {selectedOrder.address.phone}</div>
-                    </div>
-                  ) : (
-                    <div className="text-gray-400 text-sm">No address provided.</div>
-                  )}
-                </div>
-                {/* Payment Info placeholder for future use */}
-                <div className="border rounded-lg p-4 bg-gray-50">
-                  <div className="font-semibold mb-2 text-primary">Payment Info</div>
-                  <div className="text-gray-400 text-sm">(Payment details coming soon)</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {/* Order details now open on a dedicated page at /orders/:orderId */}
     </div>
   );
 };

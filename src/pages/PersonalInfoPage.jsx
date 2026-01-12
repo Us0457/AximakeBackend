@@ -109,52 +109,57 @@ const PersonalInfoPage = () => {
   };
 
   return (
-    <Card className="max-w-xl mx-auto mt-8 w-full">
+    <Card className="max-w-2xl mx-auto my-12 w-full">
       <CardHeader>
         <CardTitle>Personal Information</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="p-6">
         <form className="space-y-6">
-          <div className="flex flex-col items-center gap-2 mb-4">
-            <div className="relative group flex flex-col items-center">
-              <Avatar className="h-20 w-20">
+          <div className="flex flex-col items-center gap-3 mb-6">
+            <div className="relative inline-flex">
+              <Avatar className="h-24 w-24">
                 <AvatarImage src={profile.avatar_url} alt={profile.first_name || profile.email} />
                 <AvatarFallback>{profile.first_name ? profile.first_name[0] : profile.email[0]}</AvatarFallback>
               </Avatar>
-              <span className="mt-2 text-lg font-semibold text-primary">{profile.first_name}</span>
               {editing && (
-                <label className="absolute bottom-0 right-0 bg-primary rounded-full p-1 cursor-pointer shadow-lg hover:bg-accent transition-colors">
-                  <Camera className="h-5 w-5 text-white" />
+                <label className="absolute -bottom-0.5 -right-0.5 bg-primary rounded-full p-2 cursor-pointer shadow-md hover:bg-accent transition-colors">
+                  <Camera className="h-4 w-4 text-white" />
                   <input type="file" accept="image/*" className="hidden" onChange={handleProfilePhotoChange} />
                 </label>
               )}
             </div>
+            <span className="text-xl font-semibold text-slate-900">{profile.first_name || `${profile.email?.split('@')?.[0] || ''}`}</span>
             <span className="text-xs text-muted-foreground">Profile Picture</span>
           </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="relative">
-              <Input id="first_name" name="first_name" type="text" value={profile.first_name} onChange={handleProfileChange} disabled={!editing} required className="peer bg-background/70 pt-6" placeholder=" " />
-              <Label htmlFor="first_name" className="absolute left-3 top-1.5 text-muted-foreground text-xs transition-all peer-placeholder-shown:top-4 peer-placeholder-shown:text-base peer-focus:top-1.5 peer-focus:text-xs bg-background px-1 pointer-events-none">First Name</Label>
+            <div>
+              <Label htmlFor="first_name">First Name</Label>
+              <Input id="first_name" name="first_name" type="text" value={profile.first_name} onChange={handleProfileChange} disabled={!editing} required className="h-12 rounded-md text-sm" />
             </div>
-            <div className="relative">
-              <Input id="last_name" name="last_name" type="text" value={profile.last_name} onChange={handleProfileChange} disabled={!editing} required className="peer bg-background/70 pt-6" placeholder=" " />
-              <Label htmlFor="last_name" className="absolute left-3 top-1.5 text-muted-foreground text-xs transition-all peer-placeholder-shown:top-4 peer-placeholder-shown:text-base peer-focus:top-1.5 peer-focus:text-xs bg-background px-1 pointer-events-none">Last Name</Label>
+            <div>
+              <Label htmlFor="last_name">Last Name</Label>
+              <Input id="last_name" name="last_name" type="text" value={profile.last_name} onChange={handleProfileChange} disabled={!editing} required className="h-12 rounded-md text-sm" />
             </div>
-            <div className="relative col-span-1 md:col-span-2">
-              <Input id="phone" name="phone" type="tel" value={profile.phone} onChange={handleProfileChange} disabled={!editing} required className="peer bg-background/70 pt-6" placeholder=" " />
-              <Label htmlFor="phone" className="absolute left-3 top-1.5 text-muted-foreground text-xs transition-all peer-placeholder-shown:top-4 peer-placeholder-shown:text-base peer-focus:top-1.5 peer-focus:text-xs bg-background px-1 pointer-events-none">Phone</Label>
+
+            <div className="md:col-span-2">
+              <Label htmlFor="phone">Phone</Label>
+              <Input id="phone" name="phone" type="tel" value={profile.phone} onChange={handleProfileChange} disabled={!editing} required className="h-12 rounded-md text-sm" />
             </div>
-            <div className="relative col-span-1 md:col-span-2">
-              <Input id="email" name="email" type="email" value={profile.email} disabled className="peer bg-background/70 pt-6" placeholder=" " />
-              <Label htmlFor="email" className="absolute left-3 top-1.5 text-muted-foreground text-xs transition-all peer-placeholder-shown:top-4 peer-placeholder-shown:text-base peer-focus:top-1.5 peer-focus:text-xs bg-background px-1 pointer-events-none">Email</Label>
+
+            <div className="md:col-span-2">
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" name="email" type="email" value={profile.email} disabled className="h-12 rounded-md text-sm" />
             </div>
-            <div className="relative col-span-1 md:col-span-2">
+
+            <div>
+              <Label htmlFor="dob">Date of Birth</Label>
               <DatePicker
                 id="dob"
                 selected={profile.dob ? new Date(profile.dob) : null}
                 onChange={handleDateChange}
                 dateFormat="yyyy-MM-dd"
-                className="peer bg-background/70 pt-6 w-full rounded-md border px-3 py-2"
+                className="h-12 rounded-md text-sm w-full px-3 py-2 border"
                 disabled={!editing}
                 placeholderText="Select date"
                 showMonthDropdown
@@ -162,21 +167,22 @@ const PersonalInfoPage = () => {
                 dropdownMode="select"
                 required
               />
-              <Label htmlFor="dob" className="absolute left-3 top-1.5 text-muted-foreground text-xs transition-all peer-placeholder-shown:top-4 peer-placeholder-shown:text-base peer-focus:top-1.5 peer-focus:text-xs bg-background px-1 pointer-events-none">Date of Birth</Label>
-              <span className="helper-text text-xs text-muted-foreground">Format: YYYY-MM-DD</span>
+              <p className="text-xs text-muted-foreground mt-1">Format: YYYY-MM-DD</p>
             </div>
-            <div className="relative col-span-1 md:col-span-2">
-              <select id="gender" name="gender" value={profile.gender} onChange={handleProfileChange} disabled={!editing} required className="peer bg-background/70 w-full rounded-md border px-3 py-6 pt-6">
+
+            <div>
+              <Label htmlFor="gender">Gender</Label>
+              <select id="gender" name="gender" value={profile.gender} onChange={handleProfileChange} disabled={!editing} required className="h-12 rounded-md text-sm w-full px-3 border">
                 <option value="">Select Gender</option>
                 <option value="male">Male</option>
                 <option value="female">Female</option>
                 <option value="other">Other</option>
               </select>
-              <Label htmlFor="gender" className="absolute left-3 top-1.5 text-muted-foreground text-xs transition-all peer-focus:top-1.5 peer-focus:text-xs bg-background px-1 pointer-events-none">Gender</Label>
-              <span className="helper-text text-xs text-muted-foreground">Choose your gender.</span>
+              <p className="text-xs text-muted-foreground mt-1">Choose your gender.</p>
             </div>
           </div>
-          <div className="flex justify-end gap-2 mt-4">
+
+          <div className="flex justify-end gap-2 mt-6">
             {editing ? (
               <>
                 <Button type="button" variant="outline" onClick={() => setEditing(false)} disabled={profileLoading}>Cancel</Button>

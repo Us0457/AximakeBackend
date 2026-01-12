@@ -24,7 +24,7 @@ import React from 'react';
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -20 }}
           transition={{ duration: 0.3 }}
-          className="container mx-auto px-4 py-8"
+          className="container mx-auto px-2 sm:px-4 lg:px-6 py-8"
         >
           <h1 className="text-4xl font-bold mb-8 gradient-text">Real-Time Pricing Calculator</h1>
           <p className="text-lg text-muted-foreground mb-8">

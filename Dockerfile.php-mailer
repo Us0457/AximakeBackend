@@ -1,0 +1,31 @@
+FROM php:8.2-cli
+
+# Install system deps and PHP extensions commonly used by PHPMailer/Dompdf
+RUN apt-get update && apt-get install -y \
+    git \
+    unzip \
+    zip \
+    libzip-dev \
+    libpng-dev \
+    libjpeg-dev \
+    libfreetype6-dev \
+    libxml2-dev \
+    libssl-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install gd zip xml opcache
+
+# Install composer
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+WORKDIR /app
+
+# Copy project files
+COPY . /app
+
+# Install PHP deps if composer.json present (ignore failure to keep image buildable)
+RUN if [ -f composer.json ]; then composer install --no-dev --optimize-autoloader --no-interaction --no-progress || true; fi
+
+EXPOSE 8000
+
+# Start PHP built-in server serving the `public/` directory
+CMD ["php", "-S", "0.0.0.0:8000", "-t", "public"]

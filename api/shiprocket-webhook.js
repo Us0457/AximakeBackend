@@ -1,6 +1,8 @@
 // /api/shiprocket-webhook.js
 // Shiprocket Webhook endpoint for real-time status updates
 import { createClient } from '@supabase/supabase-js';
+import fs from 'fs';
+import path from 'path';
 import { normalizeStatus, isProgressionAllowed, isFinalStatus } from '../src/lib/shiprocket-normalizer.js';
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -141,8 +143,17 @@ export default async function handler(req, res) {
         }
       }
       const { data, error } = await supabase.from('orders').update(updates).match(whereClause).select('id,order_code');
-      if (error) console.error('Webhook update failed', whereClause, error);
-      return Array.isArray(data) && data.length > 0 ? data : null;
+      if (error) {
+        console.error('Webhook update failed', whereClause, error);
+        return null;
+      }
+      // Supabase may return an empty `data` array depending on client behavior; don't rely
+      // on that to decide whether an update happened. Use the pre-fetched `existing` row
+      // as the source of truth for whether we matched a row for this `whereClause`.
+      if (Array.isArray(data) && data.length > 0) return data;
+      if (existing) return [existing];
+      // No existing row and no returned rows -> nothing was updated
+      return null;
     } catch (err) {
       console.error('Webhook tryUpdate exception', err?.message || err);
       return null;
@@ -167,22 +178,148 @@ export default async function handler(req, res) {
       // Try matching in a sensible order: explicit order_code -> shipment_id -> awb -> shiprocket_order_id
       if (order_code) {
         const result = await tryUpdate({ order_code: String(order_code) });
-        if (result) return console.log('Webhook: updated by order_code', result.length);
+        if (result) {
+          console.log('Webhook: updated by order_code', result.length);
+          // Trigger status email flow (idempotent)
+          (async () => { try { await triggerStatusEmailForUpdatedRow(result[0], mappedStatus); } catch (e) { console.error('Email trigger failed', e); } })();
+          return;
+        }
       }
 
       if (shipment_id) {
         const result = await tryUpdate({ shiprocket_shipment_id: String(shipment_id) });
-        if (result) return console.log('Webhook: updated by shiprocket_shipment_id', result.length);
+        if (result) {
+          console.log('Webhook: updated by shiprocket_shipment_id', result.length);
+          (async () => { try { await triggerStatusEmailForUpdatedRow(result[0], mappedStatus); } catch (e) { console.error('Email trigger failed', e); } })();
+          return;
+        }
       }
 
       if (awb) {
         const result = await tryUpdate({ shiprocket_awb: String(awb) });
-        if (result) return console.log('Webhook: updated by shiprocket_awb', result.length);
+        if (result) {
+          console.log('Webhook: updated by shiprocket_awb', result.length);
+          (async () => { try { await triggerStatusEmailForUpdatedRow(result[0], mappedStatus); } catch (e) { console.error('Email trigger failed', e); } })();
+          return;
+        }
       }
 
       if (srOrderId != null) {
         const result = await tryUpdate({ shiprocket_order_id: srOrderId });
-        if (result) return console.log('Webhook: updated by shiprocket_order_id', result.length);
+        if (result) {
+          console.log('Webhook: updated by shiprocket_order_id', result.length);
+          (async () => { try { await triggerStatusEmailForUpdatedRow(result[0], mappedStatus); } catch (e) { console.error('Email trigger failed', e); } })();
+          return;
+        }
+      }
+
+      // Helper: trigger the idempotent email flow for an updated order row
+      async function triggerStatusEmailForUpdatedRow(updatedRow, mappedStatusArg) {
+            // write lightweight debug info to public/webhook-debug.log for post-mortem
+            const debugPath = path.resolve(process.cwd(), 'public', 'webhook-debug.log');
+            const dbg = (tag, obj) => {
+              try {
+                const line = JSON.stringify({ t: new Date().toISOString(), tag, obj }) + '\n';
+                fs.appendFileSync(debugPath, line);
+              } catch (e) {
+                // ignore
+              }
+            };
+        try {
+              dbg('trigger-start', { order: updatedRow.id, mappedStatusArg });
+          const orderId = updatedRow.id;
+          // Fetch full order row to get recipient and items
+          const { data: fullRows, error: fetchErr } = await supabase.from('orders').select('*').eq('id', orderId).limit(1);
+          const order = Array.isArray(fullRows) && fullRows.length ? fullRows[0] : null;
+          if (!order) {
+            console.warn('Email trigger: order row not found', orderId);
+            return;
+          }
+
+          // Derive recipient email and name from common fields (flexible)
+          let recipient = order.email || order.customer_email || order.billing_email || null;
+          let recipientName = order.customer_name || order.name || null;
+          // Try to extract from address JSON if present
+          if (!recipient && order.address) {
+            try {
+              const addr = (typeof order.address === 'string') ? JSON.parse(order.address) : order.address;
+              recipient = recipient || addr?.email || addr?.billing_email || null;
+              recipientName = recipientName || addr?.name || null;
+            } catch (e) {
+              // ignore parse errors
+            }
+          }
+          if (!recipient) {
+            console.warn('Email trigger: no recipient email found for order', orderId);
+            return;
+          }
+
+          // Normalize status into a safe key for DB and PHP handler
+          const statusKey = String(mappedStatusArg || '').toLowerCase().replace(/[^a-z0-9]+/g, '_') || 'update';
+
+          // Attempt to insert a tracking row atomically. If unique constraint prevents insert, skip sending.
+          const insertPayload = { order_id: orderId, order_code: order.order_code || null, status: statusKey };
+          dbg('insert-attempt', insertPayload);
+          const { data: insData, error: insErr } = await supabase.from('order_status_emails').insert(insertPayload).select('*');
+          if (insErr) {
+            dbg('insert-error', insErr);
+            const msg = String(insErr.message || insErr).toLowerCase();
+            if (msg.includes('duplicate') || msg.includes('unique')) {
+              // Already sent or being processed — idempotent skip
+              console.log('Email trigger: already recorded, skipping', { orderId, status: statusKey });
+              dbg('insert-duplicate', { orderId, status: statusKey });
+              return;
+            }
+            console.error('Email trigger: failed to insert order_status_emails', insErr);
+            return;
+          }
+          const emailRow = Array.isArray(insData) && insData.length ? insData[0] : null;
+          dbg('insert-success', emailRow);
+          if (!emailRow) {
+            console.error('Email trigger: insert did not return row', { orderId, statusKey });
+            dbg('insert-no-row', { orderId, statusKey });
+            return;
+          }
+
+          // Call the existing PHP mailer to send the transactional email (reusing SMTP setup and templates)
+          const phpBase = process.env.VITE_PHP_BASE_URL || process.env.PHP_BASE_URL || 'http://127.0.0.1:8000';
+          const phpUrl = phpBase.replace(/\/$/, '') + '/order-status-email.php';
+          const body = new URLSearchParams();
+          body.append('to', recipient);
+          body.append('name', recipientName || 'Customer');
+          // Always include the canonical order_id (UUID) and, when available, the human-friendly order_code
+          body.append('order_id', orderId);
+          if (order.order_code) body.append('order_code', order.order_code);
+          body.append('status', statusKey);
+          body.append('items', JSON.stringify(order.items || []));
+
+          try {
+            dbg('calling-php', { phpUrl, to: recipient });
+            const headers = {};
+            if (process.env.PHP_INVOKE_TOKEN) headers['x-php-invoke-token'] = process.env.PHP_INVOKE_TOKEN;
+            const resp = await fetch(phpUrl, { method: 'POST', headers, body });
+            const text = await resp.text();
+            dbg('php-response', { ok: resp.ok, status: resp.status, text: (text || '').slice(0, 200) });
+            if (resp.ok && (text === 'success' || text.includes('success') || text.includes('Thank you'))) {
+              // mark sent
+              await supabase.from('order_status_emails').update({ sent: true, sent_at: new Date().toISOString() }).eq('id', emailRow.id);
+              console.log('Email trigger: sent', { orderId, status: statusKey, to: recipient });
+              dbg('email-marked-sent', { emailRowId: emailRow.id });
+            } else {
+              const errText = text || `HTTP ${resp.status}`;
+              await supabase.from('order_status_emails').update({ error: errText }).eq('id', emailRow.id);
+              console.error('Email trigger: php mailer returned error', { orderId, status: statusKey, resp: errText });
+              dbg('php-error', { orderId, status: statusKey, resp: errText });
+            }
+          } catch (e) {
+            await supabase.from('order_status_emails').update({ error: String(e.message || e) }).eq('id', emailRow.id);
+            console.error('Email trigger: failed calling php mailer', e);
+            dbg('php-exception', { orderId, err: String(e.message || e) });
+          }
+        } catch (e) {
+          dbg('trigger-exception', { err: String(e.message || e) });
+          console.error('Email trigger unexpected error', e);
+        }
       }
 
       // No direct match — fetch candidate rows for debugging (non-blocking)

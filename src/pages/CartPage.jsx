@@ -95,6 +95,7 @@ const CartPage = () => {
   const [addressForm, setAddressForm] = useState({ name: '', flat_no: '', area: '', city: '', state: '', pincode: '', phone: '', email: '' });
   const [addressLoading, setAddressLoading] = useState(true);
   const [addingAddress, setAddingAddress] = useState(false);
+  const [expandedKit, setExpandedKit] = useState(null);
   const [profileRole, setProfileRole] = useState(null);
   const addressFormRef = useRef(null);
   const navigate = useNavigate();
@@ -111,9 +112,24 @@ const CartPage = () => {
       // Fetch all product details for cart items, including item_type and all needed fields
       const { data, error } = await supabase
         .from('cart_items')
-        .select('id, quantity, name, price, image, category, description, product_id, item_type, material, images, color, infill, file_url, featured, sku') // include sku
+        .select('id, quantity, name, price, image, category, description, product_id, item_type, material, images, color, infill, file_url, featured, sku, print_quality') // include sku, print_quality; avoid requesting missing columns
         .eq('user_id', user.id);
-      if (!error) setCart(data || []);
+      if (!error) {
+        const normalized = (data || []).map(d => {
+          let parsedItems = null;
+          if (d.items) parsedItems = d.items;
+          else if (d.description && typeof d.description === 'string') {
+            try {
+              const pd = JSON.parse(d.description);
+              if (pd && pd.custom_kit_items) parsedItems = pd.custom_kit_items;
+            } catch (e) {
+              // ignore
+            }
+          }
+          return { ...d, items: parsedItems };
+        });
+        setCart(normalized);
+      }
       setLoading(false);
     };
     fetchCart();
@@ -199,9 +215,10 @@ const CartPage = () => {
     fetchRole();
   }, [user]);
 
-  // Separate cart items into products and quotes based on properties
-  const products = cart.filter((item) => item.product_id);
-  const quotes = cart.filter((item) => !item.product_id && (item.file_name || item.file_url));
+  // Separate cart items into products, kits and quotes based on properties
+  const kits = cart.filter((item) => item.item_type === 'custom_kit');
+  const products = cart.filter((item) => item.product_id && item.item_type !== 'custom_kit');
+  const quotes = cart.filter((item) => !item.product_id && item.item_type !== 'custom_kit' && (item.file_name || item.file_url));
 
   // Helper to trigger cart counter update in header
   const triggerCartUpdate = () => {
@@ -378,7 +395,20 @@ const CartPage = () => {
           material: item.material || null,
           color: item.color || null,
           infill: item.infill || null,
+            print_quality: item.print_quality || 'Standard',
           images: item.images || null,
+          items: (function() {
+            if (item.items) return item.items;
+            if (item.description && typeof item.description === 'string') {
+              try {
+                const parsed = JSON.parse(item.description);
+                if (parsed && parsed.custom_kit_items) return parsed.custom_kit_items;
+              } catch (e) {
+                // not JSON, ignore
+              }
+            }
+            return null;
+          })(),
           category: item.category || null,
           description: item.description || null,
           item_type: item.item_type || null,
@@ -414,10 +444,13 @@ const CartPage = () => {
     }
     // Create Shiprocket order after order is inserted
     try {
+      // Build a Shiprocket-safe items list: explicitly strip print_quality so logistics payloads are unaffected
+      const shipItems = orderPayload.items.map(({ print_quality, ...rest }) => rest);
+      const shipPayload = { ...orderPayload, items: shipItems, address: { ...orderPayload.address, email: orderPayload.address.email || user.email || '' } };
       const shiprocketRes = await fetch(getApiUrl('/api/create-shiprocket-order'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...orderPayload, address: { ...orderPayload.address, email: orderPayload.address.email || user.email || '' } })
+        body: JSON.stringify(shipPayload)
       });
       const shiprocketData = await shiprocketRes.json();
       if (!shiprocketRes.ok) {
@@ -572,6 +605,44 @@ const CartPage = () => {
   };
 
   // Helper to render quote details
+  const renderKitCard = (item) => {
+    if (item.item_type !== 'custom_kit') return null;
+    const comps = Array.isArray(item.items) ? item.items : [];
+    const expanded = expandedKit === item.id;
+    return (
+      <Card key={item.id} className="relative flex flex-row items-stretch gap-0 p-0 mb-4 shadow-lg border border-green-100 bg-white/90 hover:shadow-2xl transition-all min-h-[112px] overflow-hidden w-full">
+        <div className="w-28 h-full flex-shrink-0 flex items-stretch justify-center bg-green-50 p-0 border-r border-green-100">
+          <div className="w-full h-full flex items-center justify-center">
+            <div className="text-sm text-green-700 font-semibold">Custom Kit</div>
+          </div>
+        </div>
+        <div className="flex flex-1 flex-col justify-between p-3 min-w-0">
+          <div className="flex flex-col min-w-0">
+            <span className="text-base font-bold text-green-800 truncate line-clamp-1">{item.name || 'Custom Kit'}</span>
+            <div className="text-xs text-zinc-600">{comps.length} components</div>
+          </div>
+          <div className="flex items-end justify-between gap-2 mt-2">
+            <div className="text-base font-bold text-green-700">₹{Math.round(Number(item.price)).toLocaleString()}</div>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => setExpandedKit(expanded ? null : item.id)}>{expanded ? 'Hide' : 'View'}</Button>
+              <Button size="icon" variant="destructive" onClick={() => handleRemove(item.id)} className="ml-2"><Trash2 className="w-4 h-4" /></Button>
+            </div>
+          </div>
+          {expanded && (
+            <div className="mt-3 border-t pt-2">
+              {comps.map((c, idx) => (
+                <div key={idx} className="flex items-center justify-between py-1">
+                  <div className="text-sm truncate">{c.name}</div>
+                  <div className="text-sm text-muted-foreground">{c.quantity} × ₹{Number(c.price).toLocaleString()}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Card>
+    );
+  };
+
   const renderQuoteCard = (item) => {
     // Only render if item is a quote (no product_id, but has file_name or file_url)
     if (item.product_id || !(item.file_name || item.file_url)) return null;
@@ -618,12 +689,57 @@ const CartPage = () => {
             <div className="flex flex-wrap gap-2 text-xs text-zinc-600 mb-1">
               {item.material && <span>Material: <span className="font-medium text-yellow-700">{item.material}</span></span>}
               {item.color && (
-                <span className="flex items-center gap-1">Color:
-                  <span className="inline-block w-3 h-3 rounded-full border border-gray-300 align-middle" style={{ background: (typeof item.color === 'string' && item.color.startsWith('#')) ? item.color : '#ccc' }}></span>
-                  <span className="font-medium text-yellow-700">{item.color_name || (typeof item.color === 'string' && item.color.startsWith('#') ? 'Custom' : item.color)}</span>
-                </span>
+                (() => {
+                  function hexToRgb(hex) {
+                    if (!hex) return null;
+                    const h = hex.replace('#', '').trim();
+                    if (h.length === 3) {
+                      return {
+                        r: parseInt(h[0] + h[0], 16),
+                        g: parseInt(h[1] + h[1], 16),
+                        b: parseInt(h[2] + h[2], 16),
+                      };
+                    }
+                    if (h.length === 6) {
+                      return { r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16) };
+                    }
+                    return null;
+                  }
+                  function hexToColorName(hex) {
+                    try {
+                      const names = {
+                        Black: '#000000', White: '#ffffff', Red: '#ff0000', Green: '#008000', Blue: '#0000ff', Yellow: '#ffff00',
+                        Orange: '#ffa500', Purple: '#800080', Pink: '#ffc0cb', Brown: '#a52a2a', Gray: '#808080', Cyan: '#00ffff',
+                        Magenta: '#ff00ff', Teal: '#008080', Olive: '#808000', Navy: '#000080', Maroon: '#800000', Lime: '#00ff00',
+                        Silver: '#c0c0c0', Gold: '#ffd700', Indigo: '#4b0082', Violet: '#ee82ee', Beige: '#f5f5dc', Coral: '#ff7f50',
+                        BlueViolet: '#8a2be2', DeepSkyBlue: '#00bfff'
+                      };
+                      const rgb = hexToRgb(hex);
+                      if (!rgb) return null;
+                      let best = { name: null, dist: Infinity };
+                      for (const [name, h] of Object.entries(names)) {
+                        const c = hexToRgb(h);
+                        const dr = c.r - rgb.r, dg = c.g - rgb.g, db = c.b - rgb.b;
+                        const d = dr*dr + dg*dg + db*db;
+                        if (d < best.dist) best = { name, dist: d };
+                      }
+                      return best.name;
+                    } catch (e) {
+                      return null;
+                    }
+                  }
+
+                  const colorLabel = item.color_name || (typeof item.color === 'string' && !item.color.startsWith('#') ? item.color : (typeof item.color === 'string' && item.color.startsWith('#') ? (hexToColorName(item.color) || '') : ''));
+                  return (
+                    <span className="flex items-center gap-1">Color:
+                      <span className="inline-block w-3 h-3 rounded-full border border-gray-300 align-middle" style={{ background: (typeof item.color === 'string' && item.color.startsWith('#')) ? item.color : (item.color || '#ccc') }}></span>
+                      <span className="font-medium text-yellow-700">{colorLabel || 'Custom'}</span>
+                    </span>
+                  );
+                })()
               )}
               {(item.infill !== undefined && item.infill !== null) && <span>Infill: <span className="font-medium text-yellow-700">{item.infill}%</span></span>}
+              {item.print_quality && <span>Quality: <span className="font-medium text-yellow-700">{item.print_quality}</span></span>}
             </div>
             {item.description && <div className="text-xs text-zinc-700 mb-1 line-clamp-2">{item.description}</div>}
           </div>
@@ -772,7 +888,7 @@ const CartPage = () => {
         <div className="w-full md:w-2/3 md:pr-4">
           {loading ? (
             <Card className="p-8 text-center text-muted-foreground">Loading...</Card>
-          ) : (products.length === 0 && quotes.length === 0) ? (
+          ) : ((cart || []).length === 0) ? (
             <div className="flex flex-col items-center justify-center py-12 w-full">
               <img
                 src={emptyCartImg}
@@ -789,6 +905,14 @@ const CartPage = () => {
                   <h2 className="text-2xl font-bold mb-4 text-indigo-700 flex items-center gap-2">Products <span className="bg-indigo-100 text-indigo-700 rounded-full px-2 py-0.5 text-xs">{products.length}</span></h2>
                   <div className="grid gap-4">
                     {products.map(renderProductCard)}
+                  </div>
+                </div>
+              )}
+              {kits.length > 0 && (
+                <div className="mb-8">
+                  <h2 className="text-2xl font-bold mb-4 text-green-700 flex items-center gap-2">Custom Kits <span className="bg-green-100 text-green-700 rounded-full px-2 py-0.5 text-xs">{kits.length}</span></h2>
+                  <div className="grid gap-4">
+                    {kits.map(renderKitCard)}
                   </div>
                 </div>
               )}

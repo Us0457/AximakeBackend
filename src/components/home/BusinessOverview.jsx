@@ -56,7 +56,7 @@ import React from 'react';
         whileInView="visible"
         viewport={{ once: true, amount: 0.2 }}
       >
-        <div className="container mx-auto px-4 max-w-6xl">
+        <div className="container mx-auto px-2 sm:px-4 lg:px-6 max-w-6xl">
           <motion.h2
             variants={itemVariants}
             className="text-2xl md:text-3xl font-semibold text-center mb-2 text-slate-50"

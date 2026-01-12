@@ -70,7 +70,7 @@ import { supabase } from '@/lib/supabaseClient';
           whileInView="visible"
           viewport={{ once: true, amount: 0.2 }}
         >
-          <div className="container mx-auto px-4">
+          <div className="container mx-auto px-2 sm:px-4 lg:px-6">
             <motion.h2 variants={itemVariants} className="text-3xl md:text-4xl font-bold text-center mb-12">What Our Clients Say</motion.h2>
             <div className="relative max-w-xl mx-auto">
               <motion.div

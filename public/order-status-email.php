@@ -54,6 +54,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
+// If a PHP_INVOKE_TOKEN is configured, require callers to present it via header
+$expectedToken = getenv('PHP_INVOKE_TOKEN') ?: '';
+if (!empty($expectedToken)) {
+    $incoming = '';
+    if (!empty($_SERVER['HTTP_X_PHP_INVOKE_TOKEN'])) {
+        $incoming = $_SERVER['HTTP_X_PHP_INVOKE_TOKEN'];
+    } elseif (!empty($_SERVER['X_PHP_INVOKE_TOKEN'])) {
+        $incoming = $_SERVER['X_PHP_INVOKE_TOKEN'];
+    } else {
+        // try getallheaders fallback
+        if (function_exists('getallheaders')) {
+            $h = getallheaders();
+            if (!empty($h['x-php-invoke-token'])) $incoming = $h['x-php-invoke-token'];
+            if (!empty($h['X-PHP-Invoke-Token'])) $incoming = $incoming ?: $h['X-PHP-Invoke-Token'];
+        }
+    }
+    if (!hash_equals($expectedToken, (string)$incoming)) {
+        http_response_code(403);
+        echo "Forbidden";
+        if (ob_get_level()) ob_end_flush();
+        exit;
+    }
+}
+
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $to = htmlspecialchars($_POST["to"] ?? $_POST["email"] ?? "");
     $name = htmlspecialchars($_POST["name"] ?? "Customer");
@@ -103,11 +127,24 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $mail->addAddress($to, $name);
         $mail->isHTML(true);
 
+        // Embed the project BrandLogo.png (preferred) for reliable rendering.
+        // Found at public/assets/BrandLogo.png in the workspace.
+        $logoPath = __DIR__ . '/assets/BrandLogo.png';
+        $logoImgHtml = '<img src="https://aximake.in/assets/BrandLogo.png" alt="Aximake" style="height:48px;margin-bottom:8px;" />';
+        if (file_exists($logoPath)) {
+            try {
+                $mail->addEmbeddedImage($logoPath, 'aximake_logo');
+                $logoImgHtml = '<img src="cid:aximake_logo" alt="Aximake" style="height:48px;margin-bottom:8px;" />';
+            } catch (Exception $e) {
+                // ignore and use public URL
+            }
+        }
+
         if ($isGeneric) {
             $mail->Subject = $subject;
             $mail->Body = '<div style="font-family:sans-serif;max-width:600px;margin:auto;padding:32px 24px;border-radius:10px;background:#f7fafc;border:1px solid #e2e8f0;">'
                 . '<div style="text-align:center;margin-bottom:24px;">'
-                . '<img src="https://aximake.in/logo.png" alt="Aximake Logo" style="height:48px;margin-bottom:8px;" />'
+                  . $logoImgHtml
                 . '<h2 style="color:#2d3748;margin:0;font-size:1.5rem;">' . htmlspecialchars($subject) . '</h2>'
                 . '</div>'
                 . '<p style="font-size:1.1rem;">Hi ' . htmlspecialchars($name) . ',</p>'
@@ -159,45 +196,34 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 if (!is_array($items) || !count($items)) return '<div style="color:#888;">No items found in this order.</div>';
                 $html = '';
                 foreach ($items as $idx => $item) {
-                    $isProduct = !empty($item['product_id']);
-                    $label = $isProduct ? 'Product' : 'Quote';
-                    $name = htmlspecialchars($isProduct ? ($item['name'] ?? '') : ($item['file_name'] ?? $item['name'] ?? 'Custom Quote'));
-                    $category = htmlspecialchars($item['category'] ?? '');
-                    $material = htmlspecialchars($item['material'] ?? '');
-                    $color = $item['color'] ?? '';
-                    $colorName = $item['color_name'] ?? '';
-                    $infill = isset($item['infill']) ? htmlspecialchars($item['infill']) : '';
-                    $productId = htmlspecialchars($item['product_id'] ?? '');
-                    $desc = htmlspecialchars($item['description'] ?? '');
-                    $qty = htmlspecialchars($item['quantity'] ?? 1);
-                    $price = number_format(floatval($item['price'] ?? 0), 2);
-                    // Image logic
-                    $img = $item['images'] ?? '';
+                    $name = htmlspecialchars($item['name'] ?? $item['file_name'] ?? 'Item');
+                    $qty = intval($item['quantity'] ?? 1);
+
+                    // Image logic (first image candidate)
+                    $img = $item['images'] ?? ($item['image'] ?? '');
                     if (is_array($img)) $img = $img[0] ?? '';
                     if (is_string($img) && strpos($img, ',') !== false) $img = explode(',', $img)[0];
                     $img = trim($img, "[]'{}\"");
                     if ($img && !preg_match('/^https?:\/\//', $img)) {
-                        $img = 'https://wruysjrqadlsljnkmnte.supabase.co/storage/v1/object/public/product-images/' . ltrim(preg_replace('/^products\//', 'products/', $img), '/');
+                        $supabaseBase = rtrim(getenv('SUPABASE_URL') ?: '', '/');
+                        if (!empty($supabaseBase)) {
+                            $img = $supabaseBase . '/storage/v1/object/public/product-images/' . ltrim(preg_replace('/^products\//', 'products/', $img), '/');
+                        } else {
+                            $img = 'https://aximake.in/assets/product-placeholder.png';
+                        }
                     }
-                    $imgTag = $img ? '<img src="' . htmlspecialchars($img) . '" alt="' . $name . '" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;margin-top:4px;" />' : '';
-                    // Download link for quote
-                    $fileUrl = !$isProduct && !empty($item['file_url']) ? htmlspecialchars($item['file_url']) : '';
-                    $fileName = !$isProduct && !empty($item['file_name']) ? htmlspecialchars($item['file_name']) : 'File';
-                    $download = $fileUrl ? '<div style="margin-top:4px;"><a href="' . $fileUrl . '" download style="color:#2563eb;text-decoration:underline;font-size:13px;">Download STL: ' . $fileName . '</a></div>' : '';
-                    $html .= '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:12px;background:#f9fafb;">
-                        <div style="font-weight:bold;margin-bottom:4px;color:' . ($isProduct ? '#4f46e5' : '#eab308') . ';">' . $label . ': ' . $name . '</div>
-                        <div style="font-size:13px;color:#444;margin-bottom:4px;">'
-                        . ($category ? 'Category: <span style="color:#6366f1;">' . $category . '</span> | ' : '')
-                        . ($material ? 'Material: <span style="color:#6366f1;">' . $material . '</span> | ' : '')
-                        . ($color ? 'Color: ' . renderColorSwatch($color, $colorName) . ' | ' : '')
-                        . ($infill !== '' ? 'Infill: ' . $infill . '% | ' : '')
-                        . ($productId ? 'Product ID: ' . $productId : '')
-                        . '</div>'
-                        . ($desc ? '<div style="font-size:13px;color:#666;margin-bottom:4px;">' . $desc . '</div>' : '')
-                        . '<div style="font-size:13px;color:#222;margin-bottom:4px;">Qty: ' . $qty . ' | Price: ₹' . $price . '</div>'
-                        . $imgTag
-                        . $download
-                        . '</div>';
+                    $imgTag = '<img src="' . htmlspecialchars($img) . '" alt="' . $name . '" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;" />';
+
+                    // One-line display: image | product name + quantity
+                    $html .= '<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin-bottom:12px;">'
+                        . '<tr>'
+                        . '<td width="72" valign="top" style="padding-right:8px;">' . $imgTag . '</td>'
+                        . '<td valign="top" style="font-size:14px;color:#2d3748;">'
+                            . '<div style="font-weight:600;margin-bottom:4px;">' . $name . '</div>'
+                            . '<div style="font-size:12px;color:#6b7280;">Quantity: ' . $qty . '</div>'
+                        . '</td>'
+                        . '</tr>'
+                        . '</table>';
                 }
                 return $html;
             }
@@ -214,15 +240,34 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 'delivered' => '<p style="margin:16px 0 0 0;">We hope you enjoy your purchase! If you have any feedback or need support, please let us know.</p>',
             ];
             $instructions = $statusInstructions[strtolower($status)] ?? '';
+            // Show a centered "View Order" button only for shipped orders
+            $viewOrderButton = '';
+            $statusNormalized = preg_replace('/[^a-z0-9]+/i', '_', strtolower($status));
+            // Prefer an explicit order_code when provided (human-friendly), else fall back to orderId
+            $orderCode = htmlspecialchars($_POST['order_code'] ?? '');
+            $hasOrderRef = !empty($orderId) || !empty($orderCode);
+            $showButton = ($statusNormalized === 'shipped' && $hasOrderRef);
+            if ($showButton) {
+                $siteBase = rtrim(getenv('SITE_BASE_URL') ?: getenv('APP_URL') ?: 'https://aximake.in', '/');
+                if (!empty($orderCode)) {
+                    $orderLink = $siteBase . '/orders/' . rawurlencode($orderCode);
+                } else {
+                    $orderLink = $siteBase . '/orders/' . rawurlencode($orderId);
+                }
+                $viewOrderButton = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:18px 0 22px 0;">'
+                    . '<a href="' . htmlspecialchars($orderLink) . '" style="background:#4f46e5;color:#ffffff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block;font-weight:600;">View Order</a>'
+                    . '</td></tr></table>';
+            }
             $mail->Subject = $subject;
             $mail->Body = '<div style="font-family:sans-serif;max-width:600px;margin:auto;padding:32px 24px;border-radius:10px;background:#f7fafc;border:1px solid #e2e8f0;">'
                 . '<div style="text-align:center;margin-bottom:24px;">'
-                . '<img src="https://aximake.in/logo.png" alt="Aximake Logo" style="height:48px;margin-bottom:8px;" />'
+                  . $logoImgHtml
                 . '<h2 style="color:#2d3748;margin:0;font-size:1.5rem;">' . $subject . '</h2>'
                 . '</div>'
                 . '<p style="font-size:1.1rem;">Hi ' . htmlspecialchars($name) . ',</p>'
                 . '<p>' . $mainMessage . '</p>'
                 . $orderDetails
+                . $viewOrderButton
                 . $instructions .
                 '<hr style="margin:32px 0 24px 0;border:none;border-top:1px solid #e2e8f0;" />'
                 . '<p style="font-size:0.97rem;color:#4a5568;">If you have any questions or need assistance, simply reply to this email or contact us at <a href="mailto:admin@aximake.in" style="color:#3182ce;">admin@aximake.in</a>.</p>'
@@ -325,6 +370,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $pdfFileName = 'Invoice-' . $orderId . '.pdf';
             $mail->addStringAttachment($pdfOutput, $pdfFileName, 'base64', 'application/pdf');
         }
+        // Save the final HTML body for inspection and optionally return it
+        file_put_contents(__DIR__ . '/last_email_body.html', $mail->Body);
+        if (!empty($_POST['dump_html'])) {
+            header('Content-Type: text/html; charset=utf-8');
+            echo $mail->Body;
+            if (ob_get_level()) ob_end_flush();
+            exit;
+        }
+
         if ($mail->send()) {
             echo "success";
         } else {

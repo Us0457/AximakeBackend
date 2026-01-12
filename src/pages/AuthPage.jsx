@@ -114,7 +114,7 @@ import React, { useState, useEffect } from 'react';
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -20 }}
           transition={{ duration: 0.3 }}
-          className="container mx-auto px-4 py-12 flex justify-center items-center min-h-[calc(100vh-10rem)]"
+          className="container mx-auto px-2 sm:px-4 lg:px-6 py-12 flex justify-center items-center min-h-[calc(100vh-10rem)]"
         >
           {showForgot ? (
             <ForgotPassword />

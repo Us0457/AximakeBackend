@@ -1,0 +1,72 @@
+services:
+  - type: web
+    name: aximake-backend
+    env: node
+    plan: free
+    branch: main
+    repo: https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPO
+    buildCommand: npm ci && npm run build
+    startCommand: node server.cjs
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        value: "<SET_IN_DASHBOARD>"
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        value: "<SET_IN_DASHBOARD>"
+      - key: SHIPROCKET_EMAIL
+        value: "<SET_IN_DASHBOARD>"
+      - key: SHIPROCKET_PASSWORD
+        value: "<SET_IN_DASHBOARD>"
+      - key: SHIPROCKET_PICKUP_LOCATION
+        value: Home
+      - key: SHIPROCKET_WEBHOOK_TOKEN
+        value: "<SET_IN_DASHBOARD>"
+      - key: VITE_PHP_BASE_URL
+        value: "https://aximake-php.onrender.com"
+      - key: PHP_BASE_URL
+        value: "https://aximake-php.onrender.com"
+      - key: PHP_INVOKE_TOKEN
+        value: "<SET_IN_DASHBOARD>"
+      - key: VITE_API_BASE_URL
+        value: "https://aximake-backend.onrender.com"
+      - key: PORT
+        value: "5050"
+
+  - type: web
+    name: aximake-php-mailer
+    env: php
+    plan: free
+    branch: main
+    repo: https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPO
+    buildCommand: composer install --no-dev --optimize-autoloader
+    startCommand: php -S 0.0.0.0:$PORT -t public
+    envVars:
+      - key: SMTP_HOST
+        value: smtp.hostinger.com
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_SECURE
+        value: ssl
+      - key: SMTP_USER
+        value: "<SET_IN_DASHBOARD>"
+      - key: SMTP_PASS
+        value: "<SET_IN_DASHBOARD>"
+      - key: PHP_INVOKE_TOKEN
+        value: "<SET_IN_DASHBOARD>"
+      - key: SMTP_FROM
+        value: admin@aximake.in
+      - key: SMTP_FROM_NAME
+        value: "Aximake 3D Printing"
+      - key: SITE_BASE_URL
+        value: "https://aximake.onrender.com"
+      - key: SUPPORT_EMAIL
+        value: "<SET_IN_DASHBOARD>"
+      - key: CONTACT_RECIPIENT
+        value: "<SET_IN_DASHBOARD>"
+      - key: SUPABASE_URL
+        value: "<SET_IN_DASHBOARD>"
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        value: "<SET_IN_DASHBOARD>"
+      - key: PORT
+        value: "8000"

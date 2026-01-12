@@ -15,7 +15,7 @@ import React from 'react';
         whileInView="visible"
         viewport={{ once: true, amount: 0.2 }}
       >
-        <div className="container mx-auto px-4">
+        <div className="container mx-auto px-2 sm:px-4 lg:px-6">
           <motion.h2 variants={itemVariants} className="text-3xl md:text-4xl font-bold text-center mb-12">Meet Our Team</motion.h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-5xl mx-auto px-4">
             {[

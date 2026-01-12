@@ -15,7 +15,7 @@ import React from 'react';
               doesn't affect other pages or layouts. */}
             {isHome && <HeroCarousel />}
             {/* Dev probe removed */}
-          <main className={`flex-grow container mx-auto px-4 py-8 ${isHome ? 'min-h-screen' : ''}`}>
+          <main className={`flex-grow container mx-auto px-2 sm:px-4 lg:px-2 py-8 ${isHome ? 'min-h-screen' : ''}`}>
             {children ?? (isHome ? <div className="min-h-screen" /> : null)}
           </main>
           <Footer />

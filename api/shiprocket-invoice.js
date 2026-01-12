@@ -1,6 +1,6 @@
 // /api/shiprocket-invoice.js
 // Usage: /api/shiprocket-invoice?shipment_id=... (GET or POST)
-import { getInvoiceUrlByOrderId, getShipmentStatus } from '../src/lib/shiprocketService.js';
+import { getInvoiceUrlByOrderId, getShipmentStatus, fetchInvoiceUrlRaw } from '../src/lib/shiprocketService.js';
 import { createClient } from '@supabase/supabase-js';
 import { normalizeStatus, isProgressionAllowed, isFinalStatus } from '../src/lib/shiprocket-normalizer.js';
 
@@ -35,8 +35,14 @@ export default async function handler(req, res) {
     if (!order_id) {
       return res.status(400).json({ error: 'No shiprocket_order_id found for this shipment_id' });
     }
-    // Call Shiprocket API to get invoice_url
-    const invoice_url = await getInvoiceUrlByOrderId(order_id);
+    // Call Shiprocket API to get invoice_url (safe fetch)
+    const srResp = await fetchInvoiceUrlRaw(order_id);
+    // Log raw Shiprocket response for auditing
+    try { console.log('Shiprocket invoice raw response:', JSON.stringify(srResp)); } catch (e) {}
+    let invoice_url = null;
+    if (srResp && srResp.data && typeof srResp.data === 'object' && srResp.data.invoice_url) {
+      invoice_url = srResp.data.invoice_url;
+    }
     // Fetch latest tracking info from Shiprocket
     let latestStatus = 'INVOICED';
     let latestStatusCode = null;
@@ -68,8 +74,16 @@ export default async function handler(req, res) {
     if (Object.keys(updates).length) {
       await supabase.from('orders').update(updates).eq('shiprocket_shipment_id', shipment_id);
     }
-    // Return invoice_url to frontend
-    return res.status(200).json({ invoice_url });
+    // If invoice_url present, return it. Otherwise return a clear error message and log details.
+    if (invoice_url) {
+      console.log('Returning invoice_url to frontend for order', order_id, invoice_url);
+      return res.status(200).json({ invoice_url });
+    }
+    // No invoice URL yet — log full Shiprocket data and return a useful message
+    console.warn('Invoice not available yet for Shiprocket order id', order_id, 'response:', srResp);
+    // Map common Shiprocket shapes to descriptive errors
+    const message = (srResp && srResp.data && srResp.data.message) ? srResp.data.message : 'Invoice not generated yet';
+    return res.status(409).json({ error: 'Invoice not generated yet', details: message });
   } catch (err) {
     console.error('Shiprocket invoice error for shipment_id', shipment_id, ':', err);
     res.status(500).json({ error: 'Invoice download failed: ' + (err.message || err) });

@@ -22,14 +22,22 @@ export function getPhpUrl(path) {
 export function getLatestScanLabel(events, fallback) {
   try {
     const evs = Array.isArray(events) ? events : [];
-    if (!evs.length) return fallback;
-    const sorted = evs.slice().sort((a, b) => {
-      const da = a && a.date ? Date.parse(a.date) || 0 : 0;
-      const db = b && b.date ? Date.parse(b.date) || 0 : 0;
-      return db - da;
-    });
-    const latest = sorted[0];
-    return (latest && (latest['sr-status-label'] || latest.sr_status_label || latest.activity || latest.status)) || fallback;
+    let raw = fallback;
+    if (evs.length) {
+      const sorted = evs.slice().sort((a, b) => {
+        const da = a && a.date ? Date.parse(a.date) || 0 : 0;
+        const db = b && b.date ? Date.parse(b.date) || 0 : 0;
+        return db - da;
+      });
+      const latest = sorted[0];
+      raw = (latest && (latest['sr-status-label'] || latest.sr_status_label || latest.activity || latest.status)) || fallback;
+    }
+    if (typeof raw === 'string') {
+      const lower = raw.trim().toLowerCase();
+      if (lower === 'canceled' || lower === 'cancel') return 'Cancelled';
+      if (lower === 'cancelled') return 'Cancelled';
+    }
+    return raw;
   } catch (e) {
     return fallback;
   }

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { getApiUrl } from '@/lib/utils';
 
 const statusColors = {
   Active: "bg-green-100 text-green-700",
@@ -14,6 +15,7 @@ const CustomerManagementPage = () => {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [suspendModal, setSuspendModal] = useState({ open: false, id: null, email: null });
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [fetchError, setFetchError] = useState(null);
@@ -69,11 +71,37 @@ const CustomerManagementPage = () => {
     return list.filter(c => c.email.toLowerCase().includes(search.toLowerCase()));
   }
 
+  // Suspend/Activate handler: do NOT update a non-existent `status` column directly.
+  // Suspend should be handled by a backend admin API that performs safe deletion.
   async function handleStatusChange(id, newStatus) {
-    setStatusUpdating(true);
-    await supabase.from("profiles").update({ status: newStatus }).eq("id", id);
-    await fetchData();
-    setStatusUpdating(false);
+    // If attempting to suspend, ask for confirmation then call admin API
+    if (newStatus === "Suspended") {
+      const ok = window.confirm("Are you sure you want to suspend this customer? This action will permanently remove the user's account, profile data, and avatar image. This action cannot be undone.");
+      if (!ok) return;
+      setStatusUpdating(true);
+      try {
+        const res = await fetch(getApiUrl('/api/admin/suspend-user'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id })
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          alert('Suspend failed: ' + (data?.error || data?.message || `HTTP ${res.status}`));
+        } else {
+          alert('Customer suspended successfully');
+          await fetchData();
+        }
+      } catch (e) {
+        console.error('Suspend failed', e);
+        alert('Suspend failed: ' + (e?.message || e));
+      }
+      setStatusUpdating(false);
+      return;
+    }
+
+    // Activating a suspended user is not implemented here. If you have a `status` column
+    // in your schema and wish to support toggling, implement a dedicated RPC or admin API.
+    alert('Activation is not supported from this UI; please use the admin API.');
   }
 
   return (
@@ -133,8 +161,8 @@ const CustomerManagementPage = () => {
                   <span className={`px-2 py-1 rounded text-xs font-semibold ${statusColors[c.status || "Active"]}`}>{c.status || "Active"}</span>
                 </td>
                 <td className="px-4 py-3">
-                  <Button size="sm" variant="outline" disabled={statusUpdating} onClick={e => {e.stopPropagation(); handleStatusChange(c.id, c.status === "Active" ? "Suspended" : "Active");}}>
-                    {c.status === "Active" ? "Suspend" : "Activate"}
+                  <Button size="sm" variant="outline" disabled={statusUpdating} onClick={e => { e.stopPropagation(); if ((c.status || 'Active') === 'Active') { setSuspendModal({ open: true, id: c.id, email: c.email }); } else { alert('Activation not supported from this UI'); } }}>
+                    {(c.status || 'Active') === 'Active' ? 'Suspend' : 'Activate'}
                   </Button>
                 </td>
               </tr>
@@ -180,6 +208,42 @@ const CustomerManagementPage = () => {
             <div className="mt-4">
               <div className="font-semibold mb-1">Customer Inquiries</div>
               <div className="text-gray-400 text-sm">(Inquiries/messages coming soon)</div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Suspend Confirmation Modal */}
+      {suspendModal.open && (
+        <div className="fixed inset-0 z-[9999] flex items-end md:items-center justify-center bg-black/60 p-4" onClick={() => setSuspendModal({ open: false, id: null, email: null })}>
+          <div className="bg-white rounded-lg shadow-lg w-full md:w-2/3 max-w-xl p-6 relative z-[10000]" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <h3 className="text-xl font-semibold mb-3">Confirm Suspension</h3>
+            <p className="text-sm text-gray-700 mb-4">Are you sure you want to suspend this customer? This action will permanently remove the user’s account, profile data, and avatar image. This action cannot be undone.</p>
+            <div className="text-sm text-gray-600 mb-4">Customer: <strong>{suspendModal.email}</strong></div>
+            <div className="flex justify-end gap-3">
+              <button className="px-4 py-2 bg-white border rounded" onClick={() => setSuspendModal({ open: false, id: null, email: null })}>Cancel</button>
+              <button className="px-4 py-2 bg-red-600 text-white rounded" onClick={async () => {
+                setStatusUpdating(true);
+                try {
+                  // Use current session token for Authorization: Bearer <token>
+                  const { data: sessionData } = await supabase.auth.getSession();
+                  const token = sessionData?.session?.access_token || null;
+                  const headers = { 'Content-Type': 'application/json' };
+                  if (token) headers['Authorization'] = `Bearer ${token}`;
+                  const res = await fetch(getApiUrl('/api/admin/suspend-user'), { method: 'POST', headers, body: JSON.stringify({ id: suspendModal.id }) });
+                  const data = await res.json().catch(() => null);
+                  if (!res.ok) {
+                    alert('Suspend failed: ' + (data?.error || data?.message || `HTTP ${res.status}`));
+                  } else {
+                    alert('Customer suspended');
+                    setSuspendModal({ open: false, id: null, email: null });
+                    await fetchData();
+                  }
+                } catch (e) {
+                  console.error('Suspend failed', e);
+                  alert('Suspend failed: ' + (e?.message || e));
+                }
+                setStatusUpdating(false);
+              }}>Confirm Suspension</button>
             </div>
           </div>
         </div>

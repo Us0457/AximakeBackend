@@ -11,7 +11,7 @@ import React from 'react';
         whileInView="visible"
         viewport={{ once: true, amount: 0.2 }}
       >
-        <div className="container mx-auto px-4">
+        <div className="container mx-auto px-2 sm:px-4 lg:px-6">
           <motion.h2 variants={itemVariants} className="text-3xl md:text-4xl font-bold text-center mb-6">Who We Are</motion.h2>
           <motion.p variants={itemVariants} className="text-lg text-muted-foreground text-center max-w-3xl mx-auto mb-12">
             Aximake was founded by a team of passionate engineers and designers who believe in the transformative power of 3D printing. We started with a simple mission: to make high-quality, custom 3D printing accessible to everyone, from individual hobbyists to large corporations.

@@ -12,6 +12,8 @@ const statusColors = {
   shipping: "bg-purple-200 text-purple-900", // added for shipping status
   delivered: "bg-green-500 text-white", // strong green
   cancelled: "bg-red-500 text-white",
+  // Shiprocket / DB may use either spelling; map both to same style
+  canceled: "bg-red-500 text-white",
   fulfilled: "bg-green-300 text-green-900", // fallback for legacy
 };
 
@@ -29,6 +31,9 @@ const OrderManagementPage = () => {
   const [shipLoading, setShipLoading] = useState({}); // { [shipment_id]: boolean }
   const [refreshing, setRefreshing] = useState({}); // { [shipment_id]: boolean }
   const maxRows = 50;
+  const [selectedOrders, setSelectedOrders] = useState(new Set()); // set of shiprocket_order_id
+  const [bulkAction, setBulkAction] = useState('');
+  const [actionLoading, setActionLoading] = useState(false);
 
   // --- Real-time subscription for new/updated orders and Shiprocket status ---
   useEffect(() => {
@@ -59,11 +64,195 @@ const OrderManagementPage = () => {
     setFetchError(null);
     const { data, error } = await supabase
       .from("orders")
-      .select("id, user_id, created_at, price, order_status, items, address, order_code, discount_code, discount_amount, shiprocket_shipment_id, shiprocket_awb, shiprocket_status, shiprocket_label_url, shiprocket_events")
+      .select("id, user_id, created_at, price, order_status, items, address, order_code, discount_code, discount_amount, shiprocket_shipment_id, shiprocket_order_id, shiprocket_awb, shiprocket_status, shiprocket_label_url, shiprocket_events, cancelled_by, cancel_reason, cancel_comment, cancelled_at")
       .order("created_at", { ascending: false });
     if (error) setFetchError(error.message);
-    setOrders(data || []);
+    // Normalize items for each order in case items is stored as JSON string
+    const normalized = (data || []).map(o => {
+      if (o && o.items && typeof o.items === 'string') {
+        try {
+          const pd = JSON.parse(o.items);
+          if (Array.isArray(pd)) return { ...o, items: pd };
+        } catch (e) { }
+      }
+      return o;
+    });
+    setOrders(normalized);
     setLoading(false);
+  }
+
+  async function handleSingleAction(order, action) {
+    if (!order || !action) return;
+    const oid = order.shiprocket_order_id;
+    // If shiprocket_order_id missing, try shipment-based fallbacks for common actions
+    if (!oid) {
+      if (action === 'download_invoice') {
+        // Use existing shipment-based invoice flow
+        await handleDownloadInvoice(order);
+        return;
+      }
+      if (action === 'ship') {
+        // Use shipment-based ship-now flow
+        await handleShipNow(order);
+        return;
+      }
+      alert('Order missing Shiprocket order id');
+      return;
+    }
+    setActionLoading(true);
+    try {
+      let res, data;
+      if (action === 'delete') {
+        // Delete by DB id if available
+        const dbId = order.id;
+        if (!dbId) { alert('Cannot delete: missing DB id'); setActionLoading(false); return; }
+        res = await fetch(getApiUrl('/api/orders/delete'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [dbId] }) });
+        data = await res.json().catch(() => null);
+        if (!res.ok) { alert('Delete failed: ' + (data?.error || `HTTP ${res.status}`)); return; }
+      } else {
+        res = await fetch(getApiUrl('/api/shiprocket-actions'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, ids: [oid] })
+        });
+        data = await res.json().catch(() => null);
+        if (!res.ok) { alert('Action failed: ' + (data?.error || data?.message || `HTTP ${res.status}`)); return; }
+      }
+      // If this was a download action and server returned a URL, automatically download it
+      if (action === 'download_invoice') {
+        const successItem = (data.success || [])[0];
+        const invoiceUrl = successItem && successItem.info && successItem.info.invoice_url;
+        if (invoiceUrl) {
+          try {
+            const pdfRes = await fetch(invoiceUrl);
+            if (!pdfRes.ok) throw new Error('Failed to fetch invoice PDF');
+            const blob = await pdfRes.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `invoice_${order.shiprocket_order_id || order.shiprocket_shipment_id || order.id}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { window.URL.revokeObjectURL(url); a.remove(); }, 200);
+          } catch (e) {
+            alert('Invoice download failed: ' + (e?.message || e));
+          }
+        }
+      }
+      if (action === 'download_label') {
+        const successItem = (data.success || [])[0];
+        const labelUrl = successItem && successItem.info && successItem.info.label_url;
+        if (labelUrl) {
+          try {
+            const resPdf = await fetch(labelUrl);
+            if (!resPdf.ok) throw new Error('Failed to fetch label PDF');
+            const blob = await resPdf.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `label_${order.shiprocket_order_id || order.shiprocket_shipment_id || order.id}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { window.URL.revokeObjectURL(url); a.remove(); }, 200);
+          } catch (e) {
+            alert('Label download failed: ' + (e?.message || e));
+          }
+        }
+      }
+      // Present nice success/skip/errors
+      const successCount = (data.success||[]).length;
+      const skipped = (data.skipped||[]).map(s => `${s.id}: ${s.reason}`);
+      const errors = (data.errors||[]).map(e => `${e.id}: ${e.error}`);
+      if (successCount) alert(`${successCount} action(s) completed successfully`);
+      if (skipped.length) alert(`Skipped: ${skipped.join('; ')}`);
+      if (errors.length) alert(`Errors: ${errors.join('; ')}`);
+      await fetchOrders();
+    } catch (e) {
+      alert('Action failed: ' + (e?.message || e));
+    }
+    setActionLoading(false);
+  }
+
+  async function handleBulkActionExecute() {
+    if (!bulkAction) return alert('Select a bulk action');
+    const ids = Array.from(selectedOrders || []);
+    if (!ids.length) return alert('No orders selected');
+    setActionLoading(true);
+    try {
+      // Handle DB delete locally without calling shiprocket-actions
+      if (bulkAction === 'delete') {
+        const idMap = {};
+        (orders || []).forEach(o => { if (o.shiprocket_order_id) idMap[o.shiprocket_order_id] = o.id; });
+        const dbIds = ids.map(sid => idMap[sid]).filter(Boolean);
+        if (!dbIds.length) { alert('No matching DB rows found for selected orders'); setActionLoading(false); return; }
+        try {
+          const delRes = await fetch(getApiUrl('/api/orders/delete'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: dbIds }) });
+          const delJson = await delRes.json().catch(() => null);
+          if (!delRes.ok) { alert('Delete failed: ' + (delJson?.error || `HTTP ${delRes.status}`)); setActionLoading(false); return; }
+          alert(`${delJson.deleted || dbIds.length} order(s) removed from DB`);
+          setSelectedOrders(new Set());
+          setBulkAction('');
+          await fetchOrders();
+        } catch (e) {
+          alert('Delete failed: ' + (e?.message || e));
+        }
+        setActionLoading(false);
+        return;
+      }
+
+      const res = await fetch(getApiUrl('/api/shiprocket-actions'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: bulkAction, ids }) });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) { alert('Bulk action failed: ' + (data?.error || `HTTP ${res.status}`)); setActionLoading(false); return; }
+      const successCount = (data.success||[]).length;
+      const skipped = (data.skipped||[]).map(s => `${s.id}: ${s.reason}`);
+      const errors = (data.errors||[]).map(e => `${e.id}: ${e.error}`);
+      // If this was a bulk download action, try to download returned URLs sequentially
+      if (bulkAction === 'download_invoice' && Array.isArray(data.success) && data.success.length) {
+        for (const item of data.success) {
+          const url = item?.info?.invoice_url;
+          if (!url) continue;
+          try {
+            const r = await fetch(url);
+            if (!r.ok) { console.warn('Failed to fetch invoice for', item.id); continue; }
+            const blob = await r.blob();
+            const obj = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = obj;
+            a.download = `invoice_${item.id}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { window.URL.revokeObjectURL(obj); a.remove(); }, 200);
+          } catch (e) { console.warn('Invoice download failed for', item.id, e); }
+        }
+      }
+      if (bulkAction === 'download_label' && Array.isArray(data.success) && data.success.length) {
+        for (const item of data.success) {
+          const url = item?.info?.label_url;
+          if (!url) continue;
+          try {
+            const r = await fetch(url);
+            if (!r.ok) { console.warn('Failed to fetch label for', item.id); continue; }
+            const blob = await r.blob();
+            const obj = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = obj;
+            a.download = `label_${item.id}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { window.URL.revokeObjectURL(obj); a.remove(); }, 200);
+          } catch (e) { console.warn('Label download failed for', item.id, e); }
+        }
+      }
+      
+      if (successCount) alert(`${successCount} orders processed successfully`);
+      if (skipped.length) alert(`Skipped: ${skipped.join('; ')}`);
+      if (errors.length) alert(`Errors: ${errors.join('; ')}`);
+      setSelectedOrders(new Set());
+      setBulkAction('');
+      await fetchOrders();
+    } catch (e) {
+      alert('Bulk action failed: ' + (e?.message || e));
+    }
+    setActionLoading(false);
   }
 
   async function fetchCustomers() {
@@ -224,17 +413,23 @@ const OrderManagementPage = () => {
       return;
     }
 
-    // Proceed with cancellation: update DB and notify customer
+    // Proceed with cancellation: call backend to cancel via Shiprocket and update DB
     setStatusUpdating(true);
     try {
-      await supabase.from('orders').update({ order_status: 'cancelled' }).eq('id', order.id);
-      // Optionally send notification via existing email flow by reusing handleStatusChange for consistency
-      try {
-        await handleStatusChange(order, 'cancelled');
-      } catch (e) {
-        // ignore secondary email errors
+      const res = await fetch(getApiUrl('/api/shiprocket-cancel-order'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_id: order.id })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = data?.error || data?.message || `HTTP ${res.status}`;
+        alert('Cancel failed: ' + msg);
+      } else {
+        // Optionally trigger email/notification via existing flow
+        try { await handleStatusChange(order, 'cancelled'); } catch (e) { /* ignore */ }
+        await fetchOrders();
       }
-      await fetchOrders();
     } catch (e) {
       console.error('Failed to cancel order:', e);
       alert('Failed to cancel order: ' + (e?.message || e));
@@ -246,11 +441,26 @@ const OrderManagementPage = () => {
   async function handleDownloadInvoice(order) {
     if (!order.shiprocket_shipment_id) return;
     try {
-      const res = await fetch(getApiUrl(`/api/shiprocket-invoice/${order.shiprocket_shipment_id}`));
-      if (!res.ok) throw new Error('Failed to download invoice');
-      const blob = await res.blob();
+      // First call backend to get invoice_url (backend may return 200 JSON with invoice_url or 409 if not ready)
+      const res = await fetch(getApiUrl(`/api/shiprocket-invoice?shipment_id=${order.shiprocket_shipment_id}`));
+      const contentType = res.headers.get('content-type') || '';
+      let data = null;
+      if (contentType.includes('application/json')) data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const msg = data?.error || data?.message || data?.details || `HTTP ${res.status}`;
+        alert('Invoice not available: ' + msg);
+        return;
+      }
+      if (!data || !data.invoice_url) {
+        alert('Invoice is not available yet. Please try again later.');
+        return;
+      }
+      // Fetch the actual PDF from the returned URL and trigger download
+      const pdfRes = await fetch(data.invoice_url);
+      if (!pdfRes.ok) throw new Error('Failed to fetch invoice PDF from Shiprocket URL');
+      const blob = await pdfRes.blob();
       let filename = `invoice_${order.shiprocket_shipment_id}.pdf`;
-      const disposition = res.headers.get('content-disposition');
+      const disposition = pdfRes.headers.get('content-disposition');
       if (disposition) {
         const match = disposition.match(/filename="?([^";]+)"?/);
         if (match) filename = match[1];
@@ -312,9 +522,60 @@ const OrderManagementPage = () => {
     return displayName;
   }
 
+  // Determine if a given action is allowed for an order (used to enable/disable action UI)
+  function isActionAllowed(order, action) {
+    if (!order) return false;
+    const fallback = order.shiprocket_status || order.order_status || "pending";
+    const currentLabel = getLatestScanLabel(order.shiprocket_events, fallback) || fallback;
+    const curNorm = String(currentLabel || "").toLowerCase();
+    const isFinal = curNorm.includes('delivered') || curNorm.includes('cancel') || curNorm.includes('fulfilled');
+
+    switch (action) {
+      case 'ship':
+        // Allow shipping only when Shiprocket status is NEW, shipment exists and no AWB assigned
+        return !!order.shiprocket_shipment_id && !order.shiprocket_awb && curNorm.includes('new');
+      case 'download_invoice':
+        // Invoice can be requested if we have a shipment id; backend will return 409 if not ready
+        return !!order.shiprocket_shipment_id;
+      case 'download_label':
+        return !!order.shiprocket_awb;
+      case 'generate_manifest':
+        // Not implemented server-side yet
+        return false;
+      case 'sync_order':
+        return !!order.shiprocket_order_id;
+      case 'sync_shipment':
+        return !!order.shiprocket_shipment_id;
+      case 'sync_tracking':
+        return !!order.shiprocket_awb;
+      case 'cancel':
+        // Allow cancel at any stage (server will attempt cancel via Shiprocket)
+        return true;
+      default:
+        return false;
+    }
+  }
+
   return (
-    <div className="max-w-7xl mx-auto py-10 px-4">
+    <div className="max-w-7xl mx-auto py-10 px-1">
       <h1 className="text-3xl font-bold mb-6 text-primary">Order Management</h1>
+      <div className="flex items-center gap-3 mb-4">
+        <div className="text-sm text-gray-700">Selected: <strong>{selectedOrders.size}</strong></div>
+        <select value={bulkAction} onChange={e => setBulkAction(e.target.value)} className="border rounded px-2 py-1">
+          <option value="">Bulk action</option>
+          <option value="ship">Ship (generate AWB)</option>
+          <option value="download_invoice">Download Invoice</option>
+          <option value="download_label">Download Label</option>
+          <option value="sync_order">Sync Order</option>
+          <option value="sync_shipment">Sync Shipment</option>
+          <option value="sync_tracking">Sync Tracking</option>
+          <option value="generate_manifest">Generate Manifest</option>
+          <option value="cancel">Cancel Orders</option>
+          <option value="delete">Delete Orders (remove from DB)</option>
+        </select>
+        <Button onClick={handleBulkActionExecute} disabled={actionLoading || selectedOrders.size === 0 || !bulkAction}>Execute</Button>
+        <Button variant="outline" onClick={() => { setSelectedOrders(new Set()); setBulkAction(''); }} disabled={selectedOrders.size === 0}>Clear</Button>
+      </div>
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
         <div className="flex gap-2">
           <Button variant={statusFilter === "all" ? "default" : "outline"} onClick={() => setStatusFilter("all")}>All</Button>
@@ -347,6 +608,9 @@ const OrderManagementPage = () => {
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">
+                <input type="checkbox" onChange={e => { if (e.target.checked) { const all = filterOrders(orders); const s = new Set(selectedOrders); paginatedOrders(all).forEach(o => o.shiprocket_order_id && s.add(o.shiprocket_order_id)); setSelectedOrders(s); } else setSelectedOrders(new Set()); }} checked={paginatedOrders(filterOrders(orders)).every(o => o.shiprocket_order_id && selectedOrders.has(o.shiprocket_order_id))} />
+              </th>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Order ID</th>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Customer</th>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Date</th>
@@ -367,6 +631,9 @@ const OrderManagementPage = () => {
               <tr><td colSpan={13} className="py-8 text-center text-gray-400">No orders found.</td></tr>
             ) : paginatedOrders(filterOrders(orders)).map(o => (
               <tr key={o.id} className="hover:bg-gray-50 transition cursor-pointer" onClick={() => setSelectedOrder(o)}>
+                <td className="px-4 py-3">
+                  <input type="checkbox" checked={!!(o.shiprocket_order_id && selectedOrders.has(o.shiprocket_order_id))} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); setSelectedOrders(prev => { const s = new Set(Array.from(prev)); if (!o.shiprocket_order_id) return s; if (s.has(o.shiprocket_order_id)) s.delete(o.shiprocket_order_id); else s.add(o.shiprocket_order_id); return s; }); }} />
+                </td>
                 <td className="px-4 py-3 font-medium text-primary underline">{getOrderCode(o)}</td>
                 <td className="px-4 py-3">{getCustomerEmail(o.user_id)}</td>
                 <td className="px-4 py-3">{o.created_at?.slice(0,10)}</td>
@@ -415,50 +682,19 @@ const OrderManagementPage = () => {
                     ) : '-';
                   })()}
                 </td>
-                <td className="px-4 py-3 flex gap-2 flex-wrap">
-                  <Button size="sm" variant="outline" disabled={statusUpdating} onClick={e => {e.stopPropagation(); handleStatusChange(o, "processing");}}>
-                    Mark Processing
-                  </Button>
-                  <Button size="sm" variant="outline" disabled={statusUpdating} onClick={e => {e.stopPropagation(); handleStatusChange(o, "shipped");}}>
-                    Mark Shipped
-                  </Button>
-                  <Button size="sm" variant="outline" disabled={statusUpdating} onClick={e => {e.stopPropagation(); handleStatusChange(o, "delivered");}}>
-                    Mark Delivered
-                  </Button>
-                  <Button size="sm" variant="outline" disabled={statusUpdating} onClick={e => {e.stopPropagation(); handleCancelOrder(o);}}>
-                    Cancel
-                  </Button>
-                  {/* Ship Now button: only show if shipment_id exists and not shipped */}
-                  {o.shiprocket_shipment_id && !o.shiprocket_awb && (
-                    <Button
-                      size="sm"
-                      variant="default"
-                      disabled={!!shipLoading[o.shiprocket_shipment_id]}
-                      onClick={e => { e.stopPropagation(); handleShipNow(o); }}
-                    >
-                      {shipLoading[o.shiprocket_shipment_id] ? 'Shipping...' : 'Ship'}
-                    </Button>
-                  )}
-                  {o.shiprocket_shipment_id && (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={!!refreshing[o.shiprocket_shipment_id]}
-                      onClick={e => { e.stopPropagation(); handleRefreshStatus(o); }}
-                    >
-                      {refreshing[o.shiprocket_shipment_id] ? 'Refreshing...' : 'Refresh Status'}
-                    </Button>
-                  )}
-                  {/* Download Invoice button */}
-                  {o.shiprocket_shipment_id && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={e => { e.stopPropagation(); handleDownloadInvoice(o); }}
-                    >
-                      Download Invoice
-                    </Button>
-                  )}
+                <td className="px-4 py-3">
+                  <select onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); const val = e.target.value; if (!val) return; handleSingleAction(o, val); e.target.selectedIndex = 0; }} className="border rounded px-2 py-1">
+                    <option value="">Action</option>
+                    <option value="ship" disabled={!isActionAllowed(o,'ship')}>Ship Order</option>
+                    <option value="download_invoice" disabled={!isActionAllowed(o,'download_invoice')}>Download Invoice</option>
+                    <option value="download_label" disabled={!isActionAllowed(o,'download_label')}>Download Label</option>
+                    <option value="sync_order" disabled={!isActionAllowed(o,'sync_order')}>Sync Order</option>
+                    <option value="sync_shipment" disabled={!isActionAllowed(o,'sync_shipment')}>Sync Shipment</option>
+                    <option value="sync_tracking" disabled={!isActionAllowed(o,'sync_tracking')}>Sync Tracking</option>
+                    <option value="generate_manifest" disabled={!isActionAllowed(o,'generate_manifest')}>Generate Manifest</option>
+                    <option value="cancel" disabled={!isActionAllowed(o,'cancel')}>Cancel Order</option>
+                    <option value="delete">Delete Order (remove from DB)</option>
+                  </select>
                 </td>
               </tr>
             ))}
@@ -538,7 +774,9 @@ const OrderManagementPage = () => {
                     selectedOrder.items.map((item, idx) => (
                       <div key={item.id || idx} className="border rounded p-3 bg-gray-50">
                         <div className="font-medium mb-1">
-                          {item.product_id ? (
+                          {item.item_type === 'custom_kit' ? (
+                            <span className="text-green-700">Custom Kits: {item.name}</span>
+                          ) : item.product_id ? (
                             <span className="text-indigo-700">Product: {item.name}</span>
                           ) : (
                             <span className="text-yellow-700">Quote: {item.product_id ? item.name : getQuoteDisplayName(item)}</span>
@@ -548,19 +786,68 @@ const OrderManagementPage = () => {
                           {item.category && <span>Category: <span className="font-semibold text-indigo-700">{item.category}</span></span>}
                           {item.material && <span>Material: <span className="font-semibold text-indigo-700">{item.material}</span></span>}
                           {item.color && (
-                            <span>Color: <span className="font-semibold text-indigo-700">
-                              {(item.color_name || (typeof item.color === 'string' && item.color.startsWith('#')))
-                                ? <>
-                                    <span className="inline-block w-4 h-4 rounded-full align-middle mr-1 border" style={{ backgroundColor: item.color, borderColor: '#ccc' }}></span>
-                                    {item.color_name || 'Custom'}
-                                  </>
-                                : item.color}
-                            </span></span>
+                            (() => {
+                              function hexToRgb(hex) {
+                                if (!hex) return null;
+                                const h = hex.replace('#', '').trim();
+                                if (h.length === 3) return { r: parseInt(h[0]+h[0],16), g: parseInt(h[1]+h[1],16), b: parseInt(h[2]+h[2],16) };
+                                if (h.length === 6) return { r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16) };
+                                return null;
+                              }
+                              function hexToColorName(hex) {
+                                try {
+                                  const names = { Black: '#000000', White: '#ffffff', Red: '#ff0000', Green: '#008000', Blue: '#0000ff', Yellow: '#ffff00', Orange: '#ffa500', Purple: '#800080', Pink: '#ffc0cb', Brown: '#a52a2a', Gray: '#808080', Cyan: '#00ffff', Magenta: '#ff00ff', Teal: '#008080', Olive: '#808000', Navy: '#000080', Maroon: '#800000', Lime: '#00ff00', Silver: '#c0c0c0', Gold: '#ffd700', Indigo: '#4b0082', Violet: '#ee82ee', Beige: '#f5f5dc', Coral: '#ff7f50', 'BlueViolet':'#8a2be2', 'DeepSkyBlue':'#00bfff' };
+                                  const rgb = hexToRgb(hex);
+                                  if (!rgb) return null;
+                                  let best = { name: null, dist: Infinity };
+                                  for (const [name, h] of Object.entries(names)) {
+                                    const c = hexToRgb(h);
+                                    const dr = c.r - rgb.r, dg = c.g - rgb.g, db = c.b - rgb.b;
+                                    const d = dr*dr + dg*dg + db*db;
+                                    if (d < best.dist) best = { name, dist: d };
+                                  }
+                                  return best.name;
+                                } catch (e) { return null; }
+                              }
+                              const colorLabel = item.color_name || (typeof item.color === 'string' && !item.color.startsWith('#') ? item.color : (typeof item.color === 'string' && item.color.startsWith('#') ? (hexToColorName(item.color) || '') : ''));
+                              return (
+                                <span>Color: <span className="font-semibold text-indigo-700">
+                                  <span className="inline-block w-4 h-4 rounded-full align-middle mr-1 border" style={{ backgroundColor: item.color, borderColor: '#ccc' }}></span>
+                                  {colorLabel || 'Custom'}
+                                </span></span>
+                              );
+                            })()
                           )}
                           {item.infill && <span>Infill: <span className="font-semibold text-indigo-700">{item.infill}%</span></span>}
+                          {(!item.product_id && (item.file_url || item.file_name)) && item.print_quality && <span>Quality: <span className="font-semibold text-indigo-700">{item.print_quality}</span></span>}
                           {/* Product ID removed from UI per design */}
                         </div>
                         {/* Product description removed from order item display (UI-only change) */}
+                        {item.item_type === 'custom_kit' && (() => {
+                          // extract components from item.items or description
+                          let comps = Array.isArray(item.items) ? item.items : null;
+                          if (!comps && typeof item.items === 'string') {
+                            try { const pd = JSON.parse(item.items); if (Array.isArray(pd)) comps = pd; } catch (e) { comps = null; }
+                          }
+                          if (!comps && item.description && typeof item.description === 'string') {
+                            try { const pd = JSON.parse(item.description); if (pd && Array.isArray(pd.custom_kit_items)) comps = pd.custom_kit_items; } catch (e) { comps = null; }
+                          }
+                          comps = comps || [];
+                          return (
+                            <div className="mt-2">
+                              <div className="text-sm font-medium mb-1">Components</div>
+                              <div className="space-y-1 text-sm text-gray-700">
+                                {comps.length === 0 && <div className="text-xs text-gray-500">No components listed</div>}
+                                {comps.map((c, ci) => (
+                                  <div key={ci} className="flex items-center justify-between">
+                                    <div className="min-w-0 truncate">{c.name}</div>
+                                    <div className="text-sm text-gray-600">{c.quantity} × ₹{Number(c.price).toLocaleString()}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
                         <div className="flex items-center gap-4 mt-1">
                           <span className="font-bold text-primary">Qty: {item.quantity}</span>
                           <span className="font-bold text-primary">₹{Math.round(Number(item.price)).toLocaleString()}</span>
@@ -625,6 +912,21 @@ const OrderManagementPage = () => {
                 <div className="font-semibold mb-2 text-primary">Payment Info</div>
                 <div className="text-gray-400 text-sm">(Payment details coming soon)</div>
               </div>
+              {(() => {
+                const isCancelled = (String((selectedOrder.order_status || selectedOrder.shiprocket_status || '')).toLowerCase().includes('cancel') || String(selectedOrder.order_status || '').toLowerCase() === 'cancelled');
+                if (!isCancelled) return null;
+                return (
+                  <div className="border rounded-lg p-4 bg-red-50">
+                    <div className="font-semibold mb-2 text-red-700">Cancellation Details</div>
+                    <div className="text-sm text-gray-700 space-y-2">
+                      <div><strong>Cancelled By:</strong> {selectedOrder.cancelled_by === 'admin' ? 'Admin' : 'User'}</div>
+                      <div><strong>Reason:</strong> {selectedOrder.cancel_reason || '—'}</div>
+                      {selectedOrder.cancel_comment && <div><strong>Comment:</strong> {selectedOrder.cancel_comment}</div>}
+                      <div><strong>Cancelled On:</strong> {selectedOrder.cancelled_at ? new Date(selectedOrder.cancelled_at).toLocaleString() : '—'}</div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>

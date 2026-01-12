@@ -44,7 +44,7 @@ const AdminSettingsPage = () => {
   };
 
   return (
-    <div className="container mx-auto px-4 py-8">
+    <div className="container mx-auto px-2 sm:px-4 lg:px-6 py-8">
       <h1 className="text-3xl font-bold mb-6">Store Settings</h1>
       <h2 className="text-xl font-semibold mb-4">Custom Print Materials Configuration</h2>
       <div className="space-y-3 max-w-xl mx-auto">

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { containerVariants, itemVariants } from '@/components/home/motionVariants';
 
@@ -18,7 +19,7 @@ const Categories = () => (
     whileInView="visible"
     viewport={{ once: true, amount: 0.2 }}
   >
-    <div className="container mx-auto px-4 max-w-6xl">
+    <div className="container mx-auto px-2 sm:px-4 lg:px-6 max-w-6xl">
       <motion.div variants={itemVariants} className="text-center mb-4 md:mb-6">
         <h2 className="text-xl md:text-2xl font-bold text-neutral-900">Categories</h2>
         <p className="text-sm md:text-base text-neutral-600 mt-1">Explore what you can build with Aximake</p>
@@ -26,13 +27,8 @@ const Categories = () => (
 
       <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 items-start">
         {categories.map((cat, i) => (
-          <motion.a
-            key={cat.key}
-            href="#"
-            variants={itemVariants}
-            className="group flex flex-col items-center text-center cursor-pointer"
-            aria-label={cat.title}
-          >
+          <motion.div key={cat.key} variants={itemVariants} className="group flex flex-col items-center text-center">
+            <Link to={cat.key === 'kits' ? '/custom-kit' : '#'} aria-label={cat.title} className="w-full flex flex-col items-center">
             <div className="rounded-full bg-transparent shadow-sm p-0 w-32 h-32 md:w-40 md:h-40 flex items-center justify-center transition-transform duration-200 group-hover:-translate-y-1">
               <div
                 className="rounded-full flex items-center justify-center"
@@ -52,10 +48,11 @@ const Categories = () => (
                   />
                 </div>
               </div>
-            </div>
+              </div>
+              </Link>
 
             <span className="mt-3 text-sm md:text-base text-neutral-900 font-medium">{cat.title}</span>
-          </motion.a>
+          </motion.div>
         ))}
       </div>
     </div>

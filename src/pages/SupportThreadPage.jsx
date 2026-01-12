@@ -109,7 +109,7 @@ export default function SupportThreadPage() {
   if (!question) return <div className="py-8 text-center">Question not found.</div>;
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-3xl">
+    <div className="container mx-auto px-2 sm:px-4 lg:px-6 py-8 max-w-3xl">
       <div className="mb-4">
         <Link to="/support/forum" className="text-sm text-primary hover:underline">← Back to Forum</Link>
       </div>

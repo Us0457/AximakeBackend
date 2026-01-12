@@ -3,6 +3,7 @@ import React, { useEffect } from 'react';
     import Layout from '@/components/Layout';
     import HomePage from '@/pages/HomePage';
     import CustomPrintPage from '@/pages/CustomPrintPage';
+    import CustomKitBuilderPage from '@/pages/CustomKitBuilderPage';
     import CheckoutPage from '@/pages/CheckoutPage';
     import DashboardPage from '@/pages/DashboardPage';
     import AdminPanelPage from '@/pages/AdminPanelPage';
@@ -29,6 +30,8 @@ import React, { useEffect } from 'react';
     import ElectronicsKitDetailPage from '@/pages/ElectronicsKitDetailPage';
     import ThankYouPage from '@/pages/ThankYouPage';
     import UserOrdersPage from '@/pages/UserOrdersPage';
+    import OrderDetailsPage from '@/pages/OrderDetailsPage';
+    import InfillInfoPage from '@/pages/InfillInfoPage';
     import CustomPrintSettingsPage from '@/pages/CustomPrintSettingsPage';
     import AdminSettingsPage from '@/pages/AdminSettingsPage';
     import ReviewForm from '@/pages/ReviewForm';
@@ -36,6 +39,8 @@ import React, { useEffect } from 'react';
     import SupportForumPage from '@/pages/SupportForumPage';
     import SupportThreadPage from '@/pages/SupportThreadPage';
     import CouponsManagementPage from '@/pages/admin/CouponsManagementPage';
+    import ShippingPolicy from '@/pages/ShippingPolicy';
+    import RefundsPolicy from '@/pages/RefundsPolicy';
     import './index.css';
 
     function ScrollToTop() {
@@ -83,6 +88,7 @@ import React, { useEffect } from 'react';
               <Routes>
                 <Route path="/" element={<HomePage />} />
                 <Route path="/custom-print" element={<CustomPrintPage />} />
+                <Route path="/custom-kit" element={<CustomKitBuilderPage />} />
                 <Route path="/checkout" element={<CheckoutPage />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/admin" element={<AdminPanelPage />} />
@@ -90,6 +96,8 @@ import React, { useEffect } from 'react';
                 <Route path="/cart" element={<CartPage />} />
                 <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
                 <Route path="/terms-and-conditions" element={<TermsAndConditionsPage />} />
+                <Route path="/shipping-policy" element={<ShippingPolicy />} />
+                <Route path="/refunds" element={<RefundsPolicy />} />
                 <Route path="/admin/customers" element={<CustomerManagementPage />} />
                 <Route path="/admin/products" element={<ProductManagementPage />} />
                 <Route path="/admin/orders" element={<OrderManagementPage />} />
@@ -102,6 +110,8 @@ import React, { useEffect } from 'react';
                 <Route path="/dashboard/wishlist" element={<WishlistPage />} />
                 <Route path="/dashboard/payments" element={<PaymentsCardsPage />} />
                 <Route path="/dashboard/orders" element={<UserOrdersPage />} />
+                <Route path="/orders/:orderId" element={<OrderDetailsPage />} />
+                <Route path="/infill-info" element={<InfillInfoPage />} />
                 <Route path="/product/:id" element={<ProductDetailPage />} />
                 <Route path="/products/:id" element={<ProductDetailPage />} />
                 <Route path="/products" element={<ProductGalleryPage />} />

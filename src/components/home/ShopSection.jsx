@@ -250,18 +250,44 @@ const Carousel = ({ products = [] }) => {
   const onPointerDown = (e) => {
     const el = ref.current;
     if (!el) return;
-    // Allow native touch scrolling with momentum on touch devices
-    if (e.pointerType === 'touch') return;
-    isDownRef.current = true;
-    el.classList.add('cursor-grabbing');
+    // Record start positions for both mouse and touch.
     startXRef.current = e.pageX - el.offsetLeft;
+    startYRef.current = e.pageY - el.offsetTop;
     scrollLeftRef.current = el.scrollLeft;
-    e.target.setPointerCapture?.(e.pointerId);
+    // For mouse (non-touch) begin dragging immediately. For touch, wait until we detect horizontal intent.
+    if (e.pointerType !== 'touch') {
+      isDownRef.current = true;
+      el.classList.add('cursor-grabbing');
+      e.target.setPointerCapture?.(e.pointerId);
+    } else {
+      isDownRef.current = false;
+    }
   };
 
   const onPointerMove = (e) => {
     const el = ref.current;
     if (!el || !isDownRef.current) return;
+    // If we haven't engaged dragging for touch yet, try to detect horizontal intent.
+    if (e.pointerType === 'touch' && !isDownRef.current) {
+      const x = e.pageX - el.offsetLeft;
+      const y = e.pageY - el.offsetTop;
+      const dx = x - startXRef.current;
+      const dy = y - startYRef.current;
+      // If gesture is primarily horizontal and passes a small threshold, engage dragging.
+      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) {
+        isDownRef.current = true;
+        el.classList.add('cursor-grabbing');
+        // reset start positions so scrolling begins from current pointer
+        startXRef.current = e.pageX - el.offsetLeft;
+        scrollLeftRef.current = el.scrollLeft;
+        e.target.setPointerCapture?.(e.pointerId);
+        e.preventDefault?.();
+      } else {
+        // allow vertical scrolling to continue
+        return;
+      }
+    }
+
     const x = e.pageX - el.offsetLeft;
     const walk = x - startXRef.current;
     el.scrollLeft = scrollLeftRef.current - walk;
@@ -272,7 +298,7 @@ const Carousel = ({ products = [] }) => {
     if (!el) return;
     isDownRef.current = false;
     el.classList.remove('cursor-grabbing');
-    e.target.releasePointerCapture?.(e.pointerId);
+    try { e.target.releasePointerCapture?.(e.pointerId); } catch (err) { /* ignore */ }
   };
 
   return (
@@ -282,7 +308,7 @@ const Carousel = ({ products = [] }) => {
           ref={ref}
           data-shop-carousel
           className="flex items-stretch flex-nowrap overflow-x-auto no-scrollbar gap-3 py-2 px-0"
-          style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}
+          style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch', touchAction: 'auto' }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -310,50 +336,106 @@ const ShopSection = () => {
   const [productsBy, setProductsBy] = useState({});
   const [loading, setLoading] = useState(true);
   const [hasAny, setHasAny] = useState(false);
+  const [sections, setSections] = useState(null); // null = not loaded, [] = loaded but empty
 
   useEffect(() => {
     async function fetchAll() {
       setLoading(true);
-      const res = {};
-      for (const row of rows) {
-        // try multiple candidate fields to find real products
-        let data = [];
-        for (const term of row.filterCandidates) {
-          try {
-            // Prefer querying the `category` column first (exists in schema)
-            const { data: dcat, error: ecat } = await supabase
-              .from('products')
-              .select('*')
-              .eq('visible', true)
-              .ilike('category', `%${term}%`)
-              .limit(24);
-            if (!ecat && dcat && dcat.length) {
-              data = dcat;
-              break;
+      try {
+        // Try loading admin-configured shop sections first
+        const { data: settings } = await supabase.from('settings').select('shop_sections').maybeSingle();
+        const configured = Array.isArray(settings?.shop_sections) ? settings.shop_sections : [];
+        if (configured.length > 0) {
+          setSections(configured);
+          const res = {};
+          for (let i = 0; i < configured.length; i++) {
+            const sec = configured[i];
+            let items = [];
+            try {
+              if (sec.mode === 'manual' && Array.isArray(sec.product_ids) && sec.product_ids.length) {
+                const { data: prod } = await supabase.from('products').select('*').in('id', sec.product_ids).limit(24);
+                items = prod || [];
+              } else {
+                // category mode: use category_id as a textual match
+                const cat = sec.category_id || (sec.category && sec.category.name) || '';
+                if (cat) {
+                  const { data: dcat } = await supabase
+                    .from('products')
+                    .select('*')
+                    .eq('visible', true)
+                    .ilike('category', `%${cat}%`)
+                    .limit(24);
+                  if (dcat && dcat.length) items = dcat;
+                  else {
+                    const { data: dfallback } = await supabase
+                      .from('products')
+                      .select('*')
+                      .eq('visible', true)
+                      .or(`name.ilike.%${cat}%,description.ilike.%${cat}%`)
+                      .limit(24);
+                    items = dfallback || [];
+                  }
+                }
+              }
+            } catch (err) {
+              console.error('ShopSection configured fetch error', err);
             }
-
-            // Fallback: search in name or description if category didn't match
-            const { data: dfallback } = await supabase
-              .from('products')
-              .select('*')
-              .eq('visible', true)
-              .or(`name.ilike.%${term}%,description.ilike.%${term}%`)
-              .limit(24);
-            if (dfallback && dfallback.length) {
-              data = dfallback;
-              break;
-            }
-          } catch (e) {
-            // ignore and continue
-            console.error('ShopSection fetch error', e);
+            // use index-based key to preserve ordering if no explicit key
+            res[i] = items || [];
           }
+          setProductsBy(res);
+          const any = Object.values(res).some(a => Array.isArray(a) && a.length > 0);
+          setHasAny(any);
+          setLoading(false);
+          return;
         }
-        res[row.key] = data || [];
+
+        // No configured sections: fallback to original rows behavior
+        setSections([]);
+        const res = {};
+        for (const row of rows) {
+          // try multiple candidate fields to find real products
+          let data = [];
+          for (const term of row.filterCandidates) {
+            try {
+              // Prefer querying the `category` column first (exists in schema)
+              const { data: dcat, error: ecat } = await supabase
+                .from('products')
+                .select('*')
+                .eq('visible', true)
+                .ilike('category', `%${term}%`)
+                .limit(24);
+              if (!ecat && dcat && dcat.length) {
+                data = dcat;
+                break;
+              }
+
+              // Fallback: search in name or description if category didn't match
+              const { data: dfallback } = await supabase
+                .from('products')
+                .select('*')
+                .eq('visible', true)
+                .or(`name.ilike.%${term}%,description.ilike.%${term}%`)
+                .limit(24);
+              if (dfallback && dfallback.length) {
+                data = dfallback;
+                break;
+              }
+            } catch (e) {
+              // ignore and continue
+              console.error('ShopSection fetch error', e);
+            }
+          }
+          res[row.key] = data || [];
+        }
+        setProductsBy(res);
+        const any = Object.values(res).some(a => Array.isArray(a) && a.length > 0);
+        setHasAny(any);
+        setLoading(false);
+      } catch (e) {
+        console.error('ShopSection overall fetch failed', e);
+        setLoading(false);
       }
-      setProductsBy(res);
-      const any = Object.values(res).some(a => Array.isArray(a) && a.length > 0);
-      setHasAny(any);
-      setLoading(false);
     }
     fetchAll();
   }, []);
@@ -366,7 +448,44 @@ const ShopSection = () => {
         ) : !hasAny ? (
           <div className="text-center py-12 text-neutral-500">No products available for the shop right now.</div>
         ) : (
-          rows.map(row => {
+          // If sections were loaded and non-empty, render them; otherwise fallback rows will have been used
+          (sections && sections.length > 0 ? sections.map((sec, idx) => {
+            const products = productsBy[idx] || [];
+            if (!products || products.length === 0) return null;
+            const title = sec.title || `Section ${idx + 1}`;
+            const viewAllCategory = sec.mode === 'category' ? (sec.category_id || '') : '';
+            return (
+              <div key={sec.id || `sec-${idx}`} className="w-full">
+                <div className="w-full">
+                    <div className="grid grid-cols-1 md:grid-cols-[250px_1fr] lg:grid-cols-[250px_1fr] gap-4 md:gap-6 items-start">
+                    {/* Heading (left column) */}
+                    <div className="flex items-center">
+                      <h3 className="text-xl font-semibold">{title}</h3>
+                    </div>
+
+                    {/* View all (right column) */}
+                    <div className="flex justify-end items-center">
+                      <a href={`/products?category=${encodeURIComponent(viewAllCategory || title)}`} className="text-sm text-primary">View all</a>
+                    </div>
+
+                    {/* Category image / left banner: hidden on mobile, above carousel on tablet (md), left on desktop (lg) */}
+                    <div className="hidden md:flex justify-start items-start pt-2 md:mb-0">
+                      <div className="h-full flex items-center">
+                        <Link to={`/products?category=${encodeURIComponent(viewAllCategory || title)}`} className="inline-block">
+                          <LeftFallback src={sec.image || LEFT_CATEGORY_IMAGES[sec.key] || '/assets/categories/left-fallback.jpg'} alt={title} />
+                        </Link>
+                      </div>
+                    </div>
+
+          <style>{`[data-shop-carousel]{-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;scrollbar-width:none;-ms-overflow-style:none;} [data-shop-carousel]::-webkit-scrollbar{display:none;width:0;height:0;}`}</style>
+                    <div className="w-full overflow-hidden">
+                      <Carousel products={products} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          }) : rows.map(row => {
             const products = productsBy[row.key] || [];
             if (!products || products.length === 0) return null;
             return (
@@ -400,7 +519,7 @@ const ShopSection = () => {
                 </div>
               </div>
             );
-          })
+          }))
         )}
       </div>
     </section>

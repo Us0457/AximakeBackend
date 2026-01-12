@@ -1,79 +1,56 @@
-import React, { Suspense, useRef, useEffect, useState } from 'react';
+import React, { Suspense, useRef, useEffect, useState, useMemo, useLayoutEffect } from 'react';
     import { Canvas } from '@react-three/fiber';
     import { OrbitControls, Html, useProgress } from '@react-three/drei';
     import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
     import * as THREE from 'three';
     import { Loader2 } from 'lucide-react';
 
-    // Utility to compute volume and bounding box
-    function computeModelStats(data) {
-      try {
-        const loader = new STLLoader();
-        const geometry = loader.parse(data);
-        // Ensure geometry has the needed attributes
-        if (!geometry.attributes || !geometry.attributes.position) {
-          throw new Error("Invalid STL geometry: missing position attribute.");
-        }
-        // Compute bounding box
-        geometry.computeBoundingBox();
-        const boundingBox = geometry.boundingBox.clone();
-        const size = new THREE.Vector3();
-        boundingBox.getSize(size);
-        // Compute volume
-        let volume = 0;
-        const position = geometry.attributes.position;
-        const indexArray = geometry.index ? geometry.index.array : null;
-        const vertexCount = indexArray ? indexArray.length : position.count;
-        for (let i = 0; i < vertexCount; i += 3) {
-          const a = indexArray ? indexArray[i] : i;
-          const b = indexArray ? indexArray[i + 1] : i + 1;
-          const c = indexArray ? indexArray[i + 2] : i + 2;
-          const p0 = new THREE.Vector3().fromBufferAttribute(position, a);
-          const p1 = new THREE.Vector3().fromBufferAttribute(position, b);
-          const p2 = new THREE.Vector3().fromBufferAttribute(position, c);
-          volume += p0.dot(p1.clone().cross(p2)) / 6.0;
-        }
-        return {
-          volume: Math.abs(volume), // in mm^3
-          dimensions: { x: size.x, y: size.y, z: size.z }
-        };
-      } catch (e) {
-        console.error("Error computing model stats:", e);
-        return null;
-      }
-    }
+    // We'll memoize parsing and computing stats for a modelData buffer so parsing happens only once per file.
+    // This helper is intentionally small; heavy work is done inside useMemo in the component below.
 
     // Accept scaleFactor prop and apply it to the model's scale
-    const LoadedModel = ({ data, modelColor, scaleFactor = 1 }) => {
-      const geom = new STLLoader().parse(data);
+    // LoadedModel expects a pre-parsed geometry object. Geometry parsing and bbox computation
+    // should happen only once per modelData (memoized by parent). This component only mounts
+    // the mesh and applies a one-time transform in a layout effect.
+    const LoadedModel = ({ geomWrapper, modelColor }) => {
       const meshRef = useRef();
+      const initialScaleRef = useRef(1);
 
-      useEffect(() => {
-        if (geom && meshRef.current) {
-          geom.computeVertexNormals();
-          geom.center();
-          const boundingBox = new THREE.Box3().setFromObject(new THREE.Mesh(geom));
-          const size = new THREE.Vector3();
-          boundingBox.getSize(size);
-          let maxDim = Math.max(size.x, size.y, size.z);
-          if (maxDim < 1e-5) maxDim = 1;
+      // geomWrapper: { geom, size }
+      const geom = geomWrapper?.geom || null;
+      const size = geomWrapper?.size || new THREE.Vector3(1, 1, 1);
+
+      // Create a single material instance once; we'll update its color imperatively when modelColor changes.
+      const material = useMemo(() => new THREE.MeshStandardMaterial({ color: new THREE.Color(modelColor || '#ffffff'), metalness: 0.3, roughness: 0.6 }), []);
+
+      // One-time layout transform: grounding and scaling. Runs only when geometry changes.
+      useLayoutEffect(() => {
+        if (!geom || !meshRef.current) return;
+        try {
+          // Use size computed during memoization
+          const maxDim = Math.max(size.x || 1, size.y || 1, size.z || 1);
           const padding = 1.1;
-          // Apply extra scale factor for small display
-          const scale = (100 / (maxDim * padding)) * scaleFactor;
+          const scale = (100 / (maxDim * padding)) * (initialScaleRef.current || 1);
           meshRef.current.scale.set(scale, scale, scale);
-          meshRef.current.position.set(0, 0, 0);
+          // Ground the model: move it down by half its Y size so it sits on the grid
+          meshRef.current.position.set(0, -(size.y * scale) / 2, 0);
+        } catch (e) {
+          // don't break rendering for transform errors
+          // eslint-disable-next-line no-console
+          console.warn('Model transform failed', e);
         }
-      }, [geom, scaleFactor]);
-      
-      const material = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(modelColor),
-        metalness: 0.3,
-        roughness: 0.6,
-      });
+        // intentionally depend only on geom so UI changes don't re-run this effect
+      }, [geom]);
 
-      return (
-        <mesh ref={meshRef} geometry={geom} material={material} castShadow receiveShadow />
-      );
+      // Update material color on UI changes without remounting geometry
+      useEffect(() => {
+        if (meshRef.current && meshRef.current.material && modelColor) {
+          try { meshRef.current.material.color.set(modelColor); } catch (e) { /* ignore */ }
+        }
+      }, [modelColor]);
+
+      if (!geom) return null;
+      return <mesh ref={meshRef} geometry={geom} material={material} castShadow receiveShadow />;
     };
     
     const CanvasLoader = () => {
@@ -93,17 +70,53 @@ import React, { Suspense, useRef, useEffect, useState } from 'react';
       const [internalError, setInternalError] = useState(null);
       const [stats, setStats] = useState(null);
 
+      // Memoize heavy parsing and stats computation. This ensures parsing happens only once per modelData.
+      const geomWrapper = useMemo(() => {
+        if (!modelData) return null;
+        try {
+          const loader = new STLLoader();
+          const geometry = loader.parse(modelData);
+          if (!geometry || !geometry.attributes || !geometry.attributes.position) throw new Error('Invalid STL geometry');
+          geometry.computeVertexNormals();
+          geometry.computeBoundingBox();
+          const boundingBox = geometry.boundingBox.clone();
+          const size = new THREE.Vector3();
+          boundingBox.getSize(size);
+          // Center geometry so positioning can be applied to the mesh instead of mutating on UI updates
+          geometry.center();
+
+          // Compute approximate volume
+          let volume = 0;
+          const position = geometry.attributes.position;
+          const indexArray = geometry.index ? geometry.index.array : null;
+          const vertexCount = indexArray ? indexArray.length : position.count;
+          for (let i = 0; i < vertexCount; i += 3) {
+            const a = indexArray ? indexArray[i] : i;
+            const b = indexArray ? indexArray[i + 1] : i + 1;
+            const c = indexArray ? indexArray[i + 2] : i + 2;
+            const p0 = new THREE.Vector3().fromBufferAttribute(position, a);
+            const p1 = new THREE.Vector3().fromBufferAttribute(position, b);
+            const p2 = new THREE.Vector3().fromBufferAttribute(position, c);
+            volume += p0.dot(p1.clone().cross(p2)) / 6.0;
+          }
+          return { geom: geometry, size, stats: { volume: Math.abs(volume), dimensions: { x: size.x, y: size.y, z: size.z } } };
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('STL parse failed', e);
+          return null;
+        }
+      }, [modelData]);
+
       useEffect(() => {
         setInternalError(null);
-        if (modelData) {
-          const computed = computeModelStats(modelData);
-          setStats(computed);
-          if (onStats) onStats(computed);
+        if (geomWrapper && geomWrapper.stats) {
+          setStats(geomWrapper.stats);
+          if (onStats) onStats(geomWrapper.stats);
         } else {
           setStats(null);
           if (onStats) onStats(null);
         }
-      }, [modelData, onStats]);
+      }, [geomWrapper, onStats]);
 
       if (internalError) {
         return (
@@ -121,8 +134,8 @@ import React, { Suspense, useRef, useEffect, useState } from 'react';
             <pointLight position={[-50, -50, -100]} intensity={0.5} />
             <directionalLight position={[0, 100, 50]} intensity={0.6} castShadow />
             <Suspense fallback={<CanvasLoader />}>
-              {modelData ? (
-                <LoadedModel data={modelData} modelColor={modelColor} scaleFactor={scaleFactor} />
+              {modelData && geomWrapper ? (
+                <LoadedModel geomWrapper={geomWrapper} modelColor={modelColor} />
               ) : (
                 <Html center>
                   <p className="text-muted-foreground">Upload an STL model to view</p>

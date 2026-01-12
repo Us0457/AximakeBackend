@@ -99,6 +99,32 @@ async function getShipmentStatus(shipment_id) {
   return data;
 }
 
+// Get order details by Shiprocket numeric order ID
+async function getOrderDetails(order_id) {
+  const token = await getToken();
+  const res = await fetch(`${SHIPROCKET_BASE}/orders/show/${order_id}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  let data;
+  try { data = await res.json(); } catch (e) { throw new Error('Get order details failed: invalid JSON response: ' + e.message); }
+  logShiprocketResponse(`orders/show/${order_id}`, res, data);
+  if (!res.ok) throw new Error('Get order details failed: ' + (data.message || res.statusText || JSON.stringify(data)));
+  return data;
+}
+
+// Get shipment details (not tracking) for a given shipment_id
+async function getShipmentDetails(shipment_id) {
+  const token = await getToken();
+  const res = await fetch(`${SHIPROCKET_BASE}/shipments/${shipment_id}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  let data;
+  try { data = await res.json(); } catch (e) { throw new Error('Get shipment details failed: invalid JSON response: ' + e.message); }
+  logShiprocketResponse(`shipments/${shipment_id}`, res, data);
+  if (!res.ok) throw new Error('Get shipment details failed: ' + (data.message || res.statusText || JSON.stringify(data)));
+  return data;
+}
+
 async function getLabel(shipment_id) {
   const token = await getToken();
   const res = await fetch(`${SHIPROCKET_BASE}/courier/generate/label`, {
@@ -236,6 +262,23 @@ async function getInvoiceUrlByOrderId(order_id) {
   return data.invoice_url;
 }
 
+// Safe fetch that returns raw Shiprocket response without throwing
+async function fetchInvoiceUrlRaw(order_id) {
+  const token = await getToken();
+  const payload = { ids: [Number(order_id)] };
+  // Log payload for debugging
+  console.log('[Shiprocket] orders/print/invoice payload:', JSON.stringify(payload));
+  const res = await fetch(`${SHIPROCKET_BASE}/orders/print/invoice`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload)
+  });
+  let data;
+  try { data = await res.json(); } catch (e) { data = null; }
+  logShiprocketResponse('orders/print/invoice', res, data);
+  return { ok: res.ok, status: res.status, data };
+}
+
 export {
   createShipment,
   schedulePickup,
@@ -245,5 +288,30 @@ export {
   generateAWB,
   downloadInvoice,
   printAndDownloadInvoice,
-  getInvoiceUrlByOrderId
+  getInvoiceUrlByOrderId,
+  fetchInvoiceUrlRaw,
+  getOrderDetails,
+  getShipmentDetails
 };
+
+// Cancel one or more Shiprocket orders by their Shiprocket numeric order IDs
+async function cancelOrders(orderIds = []) {
+  if (!Array.isArray(orderIds) || orderIds.length === 0) {
+    throw new Error('cancelOrders requires an array of one or more order IDs');
+  }
+  const token = await getToken();
+  const res = await fetch(`${SHIPROCKET_BASE}/orders/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ ids: orderIds })
+  });
+  let data;
+  try { data = await res.json(); } catch (e) { throw new Error('Cancel orders failed: invalid JSON response: ' + e.message); }
+  logShiprocketResponse('orders/cancel', res, data);
+  if (!res.ok) {
+    throw new Error('Cancel orders failed: ' + (data.message || res.statusText || JSON.stringify(data)));
+  }
+  return data;
+}
+
+export { cancelOrders };

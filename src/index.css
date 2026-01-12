@@ -87,3 +87,15 @@
     .animate-slide-up-text {
       animation: slideUpText 0.5s cubic-bezier(0.4,0,0.2,1);
     }
+
+    @layer components {
+      .btn-ghost {
+        @apply bg-transparent border border-gray-200 text-gray-700 rounded transition hover:bg-gray-100;
+      }
+      .btn-ghost:disabled {
+        @apply opacity-70 cursor-not-allowed;
+      }
+      .btn-ghost-small {
+        @apply px-3 py-1 text-sm bg-transparent border border-gray-200 text-gray-700 rounded transition hover:bg-gray-100;
+      }
+    }

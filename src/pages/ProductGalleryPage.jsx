@@ -272,7 +272,7 @@ const ProductGalleryPage = () => {
   }, [currentCategory]);
 
   return (
-    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.25 }} className="container mx-auto px-2 md:px-3 py-4 max-w-7xl">
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.25 }} className="container mx-auto px-2 sm:px-4 lg:px-6 py-4 max-w-7xl">
       {/* Breadcrumb */}
       <nav className="text-sm text-zinc-600 mb-3" aria-label="Breadcrumb">
         <Link to="/" className="hover:underline">Home</Link>

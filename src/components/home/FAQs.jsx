@@ -12,7 +12,7 @@ import React from 'react';
         whileInView="visible"
         viewport={{ once: true, amount: 0.2 }}
       >
-        <div className="container mx-auto px-4 max-w-3xl">
+        <div className="container mx-auto px-2 sm:px-4 lg:px-6 max-w-3xl">
           <motion.h2 variants={itemVariants} className="text-3xl md:text-4xl font-bold text-center mb-12">Frequently Asked Questions</motion.h2>
           <motion.div variants={itemVariants}>
             <Accordion type="single" collapsible className="w-full space-y-4">

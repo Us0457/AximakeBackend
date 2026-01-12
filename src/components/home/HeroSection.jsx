@@ -11,7 +11,7 @@ import React from 'react';
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.8, ease: "easeOut" }}
       >
-        <div className="container mx-auto px-4">
+        <div className="container mx-auto px-4 sm:px-4 lg:px-6">
           <motion.h1 
             className="text-5xl md:text-7xl font-bold mb-6"
             initial={{ y: -30, opacity: 0 }}
@@ -20,7 +20,7 @@ import React from 'react';
           >
             Bring Your <span className="gradient-text">Digital</span> Designs to <span className="gradient-text">Physical</span> Reality
           </motion.h1>
-          <motion.p 
+            <motion.p 
             className="text-lg md:text-xl text-muted-foreground max-w-3xl mx-auto mb-10"
             initial={{ y: -20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}

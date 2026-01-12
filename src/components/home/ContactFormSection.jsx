@@ -23,10 +23,14 @@ import React, { useState } from 'react';
         const subject = formData.get('home-contact-subject');
         const message = formData.get('home-contact-message');
 
-        // Send to PHP mailer endpoint
-        const response = await fetch('/send-email.php', {
+        // Send to PHP mailer endpoint (expects JSON)
+        // Use VITE_PHP_BASE_URL in development if available to avoid hitting Vite dev server
+        const phpBase = (import.meta && import.meta.env && import.meta.env.VITE_PHP_BASE_URL) || '';
+        const endpoint = phpBase ? phpBase.replace(/\/$/, '') + '/send-email.php' : '/send-email.php';
+
+        const response = await fetch(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
           body: new URLSearchParams({
             name,
             email,
@@ -34,8 +38,22 @@ import React, { useState } from 'react';
             message,
           }).toString(),
         });
+
+        let json;
+        try {
+          json = await response.json();
+        } catch (err) {
+          setSending(false);
+          toast({
+            title: 'Error',
+            description: 'Invalid server response. Please try again later.',
+            variant: 'destructive',
+          });
+          return;
+        }
+
         setSending(false);
-        if (await response.text() === 'success') {
+        if (response.ok && json && json.success) {
           toast({
             title: 'Message Sent!',
             description: `Thank you, ${name || 'friend'}! We've received your message and will get back to you at ${email || 'your email'} soon.`,
@@ -44,7 +62,7 @@ import React, { useState } from 'react';
         } else {
           toast({
             title: 'Error',
-            description: 'There was a problem sending your message. Please try again later.',
+            description: (json && (json.message || json.error)) || 'There was a problem sending your message. Please try again later.',
             variant: 'destructive',
           });
         }
@@ -59,7 +77,7 @@ import React, { useState } from 'react';
           whileInView="visible"
           viewport={{ once: true, amount: 0.2 }}
         >
-          <div className="container mx-auto px-4">
+          <div className="container mx-auto px-2 sm:px-4 lg:px-6">
             <motion.h2 variants={itemVariants} className="text-3xl md:text-4xl font-bold text-center mb-8 gradient-text">Get In Touch</motion.h2>
             <motion.p variants={itemVariants} className="text-lg text-muted-foreground text-center mb-12 max-w-2xl mx-auto">
               Have questions or need assistance with your 3D printing project? We're here to help! Reach out via the form below.

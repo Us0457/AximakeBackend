@@ -8,7 +8,7 @@ import React, { useEffect, useState } from 'react';
     import { Edit, Trash2 } from 'lucide-react';
     import { useAuth } from '@/contexts/AuthContext';
     import { useNavigate } from 'react-router-dom';
-    import { FaUsers, FaBoxOpen, FaClipboardList, FaUndo } from 'react-icons/fa';
+    import { FaUsers, FaBoxOpen, FaClipboardList, FaUndo, FaTimesCircle } from 'react-icons/fa';
     import { useSpring, animated } from 'react-spring';
     import { getApiUrl, getPhpUrl } from '@/lib/utils';
 
@@ -375,7 +375,7 @@ import React, { useEffect, useState } from 'react';
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -20 }}
           transition={{ duration: 0.3 }}
-          className="container mx-auto px-4 py-0"
+          className="container mx-auto px-2 sm:px-4 lg:px-6 py-0"
         >
           <h1 className="text-4xl font-bold mb-8 gradient-text">Admin Panel</h1>
           <p className="text-lg text-muted-foreground mb-8">Manage orders and users. Send emails to users directly.</p>
@@ -401,6 +401,12 @@ import React, { useEffect, useState } from 'react';
               }
               return sum + 1;
             }, 0)} icon={FaUndo} label="Total Returns" color="#ef4444" />
+            <AnimatedCounter value={orders.filter(o => (o.order_status || '').toLowerCase() === 'cancelled').reduce((sum, o) => {
+              if (Array.isArray(o.items)) {
+                return sum + o.items.reduce((s, item) => s + (item.quantity || 1), 0);
+              }
+              return sum + 1;
+            }, 0)} icon={FaTimesCircle} label="Total Cancelled" color="#ef4444" />
           </div>
           {/* Management Modules Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 my-10">
