@@ -29,9 +29,9 @@ const Footer = () => {
       {/* Main Footer Grid */}
       <div className="bg-gradient-to-b from-white/95 to-neutral-200/95 border-t border-slate-200">
         <div className="container mx-auto px-4 sm:px-6 lg:px-6 py-10 md:py-12">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-8">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-8">
             {/* Column 1 - Brand */}
-            <div>
+            <div className="col-span-2 md:col-span-1">
                 <Link to="/" className="flex items-center space-x-3 mb-3">
                   {/* Compact footer logo: visually lighter and smaller than navbar. */}
                   <img src="/assets/BrandLogo.png" alt="Aximake" className="h-6 w-auto object-contain opacity-90" />
@@ -45,7 +45,7 @@ const Footer = () => {
             </div>
 
             {/* Column 2 - My Account */}
-            <div>
+            <div className="md:col-span-1">
               <h4 className="text-sm font-semibold text-slate-900 mb-3 hidden md:block">My Account</h4>
               <details className="md:hidden"> 
                 <summary className="text-sm font-semibold text-slate-900 mb-2">My Account</summary>
@@ -61,7 +61,7 @@ const Footer = () => {
             </div>
 
             {/* Column 3 - Services */}
-            <div>
+            <div className="md:col-span-1">
               <h4 className="text-sm font-semibold text-slate-900 mb-3 hidden md:block">Services</h4>
               <details className="md:hidden">
                 <summary className="text-sm font-semibold text-slate-900 mb-2">Services</summary>
@@ -76,7 +76,7 @@ const Footer = () => {
             </div>
 
             {/* Column 4 - Blog */}
-            <div>
+            <div className="md:col-span-1">
               <h4 className="text-sm font-semibold text-slate-900 mb-3 hidden md:block">Blog</h4>
               <details className="md:hidden">
                 <summary className="text-sm font-semibold text-slate-900 mb-2">Blog</summary>
@@ -91,7 +91,7 @@ const Footer = () => {
             </div>
 
             {/* Column 5 - Policies & Help + Social */}
-            <div>
+            <div className="md:col-span-1">
               <h4 className="text-sm font-semibold text-slate-900 mb-3 hidden md:block">Policies &amp; Help</h4>
               <details className="md:hidden">
                 <summary className="text-sm font-semibold text-slate-900 mb-2">Policies &amp; Help</summary>

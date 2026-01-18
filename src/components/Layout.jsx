@@ -1,6 +1,7 @@
 import React from 'react';
     import Header from '@/components/Header';
     import HeroCarousel from '@/components/HeroCarousel';
+    import DiscountBanners from '@/components/DiscountBanners';
     import { useLocation } from 'react-router-dom';
     import Footer from '@/components/Footer';
 
@@ -10,9 +11,9 @@ import React from 'react';
       return (
         <div className="flex flex-col min-h-screen bg-gradient-to-br from-background to-secondary/30">
             <Header />
-            {/* Render the full-width hero carousel only on the home page (path === '/')
-              Placing it here ensures it sits immediately below the navbar and
-              doesn't affect other pages or layouts. */}
+            {/* Render discount banners and the full-width hero carousel only on the home page (path === '/')
+              Placing banners here ensures they sit immediately below the navbar, above the hero/Shop sections. */}
+            {isHome && <DiscountBanners />}
             {isHome && <HeroCarousel />}
             {/* Dev probe removed */}
           <main className={`flex-grow container mx-auto px-2 sm:px-4 lg:px-2 py-8 ${isHome ? 'min-h-screen' : ''}`}>

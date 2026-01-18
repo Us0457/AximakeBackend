@@ -14,24 +14,69 @@ const DEFAULT_SLIDES = [
     id: 's1',
     isHeroSection: true
   },
+  // {
+  //   id: 's2',
+  //   title: 'End-to-end Manufacturing Support',
+  //   subtitle: 'Design reviews · Prototyping · Volume production',
+  //   image: '/assets/hero/Hero1.png',
+  //   mobilePortraitImage: '/assets/hero/HeroM1.png',
+  //   ctaText: 'Explore Services',
+  //   ctaLink: '/services'
+  // },
+  // {
+  //   id: 's3',
+  //   title: 'Scale With Confidence',
+  //   subtitle: 'Reliable supply chain and shipping integrations',
+  //   image: '/assets/hero/Hero2.png',
+  //   mobilePortraitImage: '/assets/hero/HeroM2.png',
+  //   ctaText: 'Contact Sales',
+  //   ctaLink: '/contact'
+  // },
   {
     id: 's2',
-    title: 'End-to-end Manufacturing Support',
-    subtitle: 'Design reviews · Prototyping · Volume production',
-    image: '/assets/hero/Hero1.png',
-    mobilePortraitImage: '/assets/hero/HeroM1.png',
-    ctaText: 'Explore Services',
-    ctaLink: '/services'
+    title: 'Arduino Starter Kit',
+    subtitle: 'India’s Most Thoughtfully Curated Arduino Learning Kit',
+    image: '/assets/hero/Hero3.png',
+    mobilePortraitImage: '/assets/hero/HeroM3.png',
+    // Per-slide sizing overrides (optional)
+    mobilePortraitWidth: '100%',
+    mobilePortraitHeight: '62vh',
+    mobilePortraitMaxHeight: '170vh',
+    width: '100%',
+    height: '60vh',
+    ctaText: 'Contact Sales',
+    ctaLink: '/contact'
   },
   {
     id: 's3',
-    title: 'Scale With Confidence',
-    subtitle: 'Reliable supply chain and shipping integrations',
-    image: '/assets/hero/Hero2.png',
-    mobilePortraitImage: '/assets/hero/HeroM2.png',
+    title: 'Customizable Kits',
+    subtitle: 'India’s First Truly Customizable Electronics Starter Kit',
+    image: '/assets/hero/Hero4.png',
+    mobilePortraitImage: '/assets/hero/HeroM4.png',
+    // Per-slide sizing overrides (optional)
+    mobilePortraitWidth: '100%',
+    mobilePortraitHeight: '62vh',
+    mobilePortraitMaxHeight: '170vh',
+    width: '100%',
+    height: '60vh',
     ctaText: 'Contact Sales',
     ctaLink: '/contact'
-  }
+  },
+  {
+    id: 's4',
+    title: 'Ready-To-Print 3D Models',
+    subtitle: 'Upload your CAD File and Get it 3D Printed in No Time',
+    image: '/assets/hero/Hero5.png',
+    mobilePortraitImage: '/assets/hero/HeroM5.png',
+    // Per-slide sizing overrides (optional)
+    mobilePortraitWidth: '100%',
+    mobilePortraitHeight: '62vh',
+    mobilePortraitMaxHeight: '170vh',
+    width: '100%',
+    height: '60vh',
+    ctaText: 'Contact Sales',
+    ctaLink: '/contact'
+  },
 ];
 
 const HeroCarousel = ({ slides = DEFAULT_SLIDES, interval = 5000 }) => {
@@ -173,7 +218,7 @@ const HeroCarousel = ({ slides = DEFAULT_SLIDES, interval = 5000 }) => {
                 onTouchEnd={onTouchEnd}
               >
                 <div className="w-full h-full flex items-center justify-center bg-transparent">
-                  <HeroSection />
+                  <HeroSection edgeToEdge />
                 </div>
               </div>
             );
@@ -192,13 +237,13 @@ const HeroCarousel = ({ slides = DEFAULT_SLIDES, interval = 5000 }) => {
                 onTouchEnd={onTouchEnd}
                 style={{ zIndex: isCurrent ? 20 : 10 }}
               >
-                <div className="w-full h-full flex items-center justify-center" aria-hidden>
+                <div className="w-full h-full flex items-center justify-center" aria-hidden style={{ height: s.mobilePortraitHeight || '60vh', overflow: 'hidden' }}>
                   <img
                     src={imgSrc}
                     alt={s.title || ''}
                     loading="lazy"
-                    className="w-full object-contain"
-                    style={{ width: '100%', height: 'auto', maxHeight: '80vh', display: 'block' }}
+                    className={s.mobilePortraitClassName || ''}
+                    style={{ width: s.mobilePortraitWidth || 'auto', height: '100%', objectFit: s.mobilePortraitObjectFit || 'cover', maxHeight: s.mobilePortraitMaxHeight || '100vh', display: 'block' }}
                     onError={(e) => { if (s.mobilePortraitImage && e.currentTarget.src !== s.image) e.currentTarget.src = s.image; }}
                   />
                 </div>
@@ -226,8 +271,8 @@ const HeroCarousel = ({ slides = DEFAULT_SLIDES, interval = 5000 }) => {
                   src={imgSrc}
                   alt={s.title || ''}
                   loading="lazy"
-                  className="w-full h-full object-cover"
-                  style={{ width: '100%', height: '100%' }}
+                  className={s.desktopClassName || 'w-full h-full object-cover'}
+                  style={{ width: s.width || '100%', height: s.height || '100%' }}
                 />
               </div>
             </div>

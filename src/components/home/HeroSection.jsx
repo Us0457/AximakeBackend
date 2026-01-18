@@ -3,15 +3,40 @@ import React from 'react';
     import { ArrowRight, UploadCloud } from 'lucide-react';
     import { motion } from 'framer-motion';
 
-    const HeroSection = () => (
+    const HeroSection = ({ edgeToEdge = false }) => {
+      const outerStyle = edgeToEdge ? { width: '100vw', marginLeft: 'calc(50% - 50vw)', marginRight: 'calc(50% - 50vw)' } : undefined;
+      const [headerOffsetStyle, setHeaderOffsetStyle] = React.useState({});
+
+      React.useEffect(() => {
+        if (!edgeToEdge) return;
+        const header = document.querySelector('header');
+        if (!header) return;
+        const prevPosition = header.style.position;
+        const prevZ = header.style.zIndex;
+        // ensure header appears above the hero
+        header.style.position = prevPosition || 'relative';
+        header.style.zIndex = '50';
+        const h = header.getBoundingClientRect().height || 0;
+        // move hero up underneath header visually while preserving internal spacing
+        setHeaderOffsetStyle({ marginTop: `-${h}px`, paddingTop: `${h}px` });
+        return () => {
+          // restore header styles
+          header.style.position = prevPosition;
+          header.style.zIndex = prevZ;
+          setHeaderOffsetStyle({});
+        };
+      }, [edgeToEdge]);
+
+      return (
       <motion.section 
         id="hero-section"
-        className="py-20 md:py-32 text-center bg-gradient-to-br from-primary/10 via-transparent to-accent/10 rounded-xl shadow-xl overflow-hidden"
+        style={{ ...(outerStyle || {}), ...(headerOffsetStyle || {}) }}
+        className={`py-20 md:py-32 text-center bg-gradient-to-br from-primary/10 via-transparent to-accent/10 ${edgeToEdge ? 'rounded-none shadow-none' : 'rounded-xl shadow-xl'} overflow-hidden`}
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.8, ease: "easeOut" }}
       >
-        <div className="container mx-auto px-4 sm:px-4 lg:px-6">
+        <div className={`${edgeToEdge ? 'w-full px-0' : 'container mx-auto px-4 sm:px-4 lg:px-6'}`}>
           <motion.h1 
             className="text-5xl md:text-7xl font-bold mb-6"
             initial={{ y: -30, opacity: 0 }}
@@ -61,5 +86,6 @@ import React from 'react';
         />
       </motion.section>
     );
+  };
 
-    export default HeroSection;
+export default HeroSection;
