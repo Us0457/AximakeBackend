@@ -61,15 +61,16 @@ import { supabase } from '../lib/supabaseClient';
     const DashboardPage = () => {
       const { user } = useAuth();
       const navigate = useNavigate();
+        const [profileFirstName, setProfileFirstName] = useState('');
       const [quotes, setQuotes] = useState([]);
       const [loading, setLoading] = useState(true);
       const [error, setError] = useState(null);
       const [editingProfile, setEditingProfile] = useState(false);
       const [profile, setProfile] = useState({
-        name: user?.user_metadata?.name || '',
+        name: '',
         email: user?.email || '',
-        address: user?.user_metadata?.address || '',
-        avatar_url: user?.user_metadata?.avatar_url || '',
+        address: '',
+        avatar_url: '',
       });
       const [profilePhotoFile, setProfilePhotoFile] = useState(null);
       const [profileLoading, setProfileLoading] = useState(false);
@@ -81,6 +82,22 @@ import { supabase } from '../lib/supabaseClient';
           setLoading(false);
           return;
         }
+        // Fetch profile details (first_name, avatar_url) for dashboard
+        const fetchProfile = async () => {
+          const { data, error } = await supabase
+            .from('profiles')
+            .select('first_name,avatar_url')
+            .eq('id', user.id)
+            .maybeSingle();
+          if (data) {
+            setProfileFirstName(data.first_name || '');
+            setProfile(prev => ({ ...prev, name: data.first_name || '', avatar_url: data.avatar_url || '' }));
+          } else {
+            setProfileFirstName('');
+            setProfile(prev => ({ ...prev, name: '', avatar_url: '' }));
+          }
+        };
+        fetchProfile();
         const fetchQuotes = async () => {
           setLoading(true);
           setError(null);
@@ -206,7 +223,7 @@ import { supabase } from '../lib/supabaseClient';
           </style>
           <h1 className="text-4xl font-bold mb-4 gradient-text text-center">User Dashboard</h1>
           <p className="text-lg text-muted-foreground mb-10 text-center max-w-2xl">
-            Welcome, {user?.user_metadata?.name || user?.email || 'User'}! Manage your account, quotes, wishlist, and more from your personalized dashboard.
+            Welcome, {profileFirstName || user?.user_metadata?.name || user?.user_metadata?.full_name || user?.email || 'User'}! Manage your account, quotes, wishlist, and more from your personalized dashboard.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 w-full max-w-5xl dashboard-grid">
             {dashboardSections.map(section => (

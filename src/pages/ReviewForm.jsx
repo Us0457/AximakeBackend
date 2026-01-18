@@ -60,8 +60,10 @@ const ReviewForm = () => {
           .maybeSingle();
         if (profileData && profileData.avatar_url) {
           avatarUrl = profileData.avatar_url;
-        } else if (user.user_metadata && user.user_metadata.avatar_url) {
-          avatarUrl = user.user_metadata.avatar_url;
+        } else {
+          // Avoid hotlinking provider image; if provider avatar exists, use proxied URL
+          const providerAvatar = user.user_metadata && (user.user_metadata.avatar_url || user.user_metadata.picture);
+          if (providerAvatar) avatarUrl = `https://images.weserv.nl/?url=${encodeURIComponent(providerAvatar)}&output=jpg&w=256&h=256&fit=cover`;
         }
       }
       // Insert review

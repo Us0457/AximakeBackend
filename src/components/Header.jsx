@@ -31,11 +31,13 @@ import React, { useState, useEffect, useRef } from 'react';
 
     const Header = () => {
       const [isScrolled, setIsScrolled] = useState(false);
-      const { user, logout } = useAuth();
+      const auth = useAuth() || {};
+      const { user, logout } = auth;
       const [cartCount, setCartCount] = useState(0);
       const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
       const [profileFirstName, setProfileFirstName] = useState('');
       const [profileRole, setProfileRole] = useState(null);
+      const [avatarSrc, setAvatarSrc] = useState('');
       const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
       const [mobileAllOpen, setMobileAllOpen] = useState(false);
       const [isAllProductsOpen, setIsAllProductsOpen] = useState(false);
@@ -126,50 +128,45 @@ import React, { useState, useEffect, useRef } from 'react';
         };
       }, [user]);
 
-      // Fetch avatar_url and first_name from profile table and subscribe to changes
+      // Use profile/profileReady from AuthContext for current user's avatar and name
+      const { profile: authProfile, profileReady } = auth;
       useEffect(() => {
-        let profileSub = null;
-        async function fetchProfileAvatarAndName() {
-          if (!user) {
-            setProfileAvatarUrl('');
-            setProfileFirstName('');
+        if (profileReady && authProfile) {
+          setProfileAvatarUrl(authProfile.avatar_url || '');
+          setAvatarSrc(authProfile.avatar_url || '');
+          setProfileFirstName(authProfile.first_name || '');
+        } else {
+          setProfileAvatarUrl('');
+          setAvatarSrc('');
+          setProfileFirstName('');
+        }
+      }, [authProfile, profileReady]);
+
+      // Keep avatarSrc in sync with profileAvatarUrl. Do NOT fallback to provider metadata
+      // to avoid hotlinking external avatar URLs that may be rate-limited.
+      useEffect(() => {
+        if (profileAvatarUrl) setAvatarSrc(profileAvatarUrl);
+        else setAvatarSrc('');
+      }, [profileAvatarUrl]);
+
+      // If an image fails to load (rate limit or hotlink), retry once via a proxy
+      function handleAvatarImgError(e) {
+        try {
+          const img = e?.target;
+          if (!img) return;
+          const already = img.dataset?.proxied === '1';
+          const current = img.src || avatarSrc || '';
+          if (!already && current) {
+            const prox = `https://images.weserv.nl/?url=${encodeURIComponent(current)}`;
+            img.dataset.proxied = '1';
+            setAvatarSrc(prox);
+            img.src = prox;
             return;
           }
-          // Use .maybeSingle() and handle null result to avoid 406/PGRST116 errors
-          const { data, error } = await supabase
-            .from('profiles')
-            .select('avatar_url, first_name')
-            .eq('id', user.id)
-            .maybeSingle();
-          if (data) {
-            setProfileAvatarUrl(data.avatar_url || '');
-            setProfileFirstName(data.first_name || '');
-          } else if (error) {
-            setProfileAvatarUrl('');
-            setProfileFirstName('');
-          } else {
-            setProfileAvatarUrl('');
-            setProfileFirstName('');
-          }
-        }
-        fetchProfileAvatarAndName();
-
-        // Subscribe to profile changes for live update
-        if (user) {
-          profileSub = supabase
-            .channel('public:profiles')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` }, (payload) => {
-              if (payload.new) {
-                setProfileAvatarUrl(payload.new.avatar_url || '');
-                setProfileFirstName(payload.new.first_name || '');
-              }
-            })
-            .subscribe();
-        }
-        return () => {
-          if (profileSub) supabase.removeChannel(profileSub);
-        };
-      }, [user]);
+        } catch (err) { /* ignore */ }
+        // final fallback: clear avatarSrc so AvatarFallback shows
+        setAvatarSrc('');
+      }
 
       // Fetch all products for autocomplete (assume supabase 'products' table with 'name')
       useEffect(() => {
@@ -554,9 +551,9 @@ import React, { useState, useEffect, useRef } from 'react';
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" size="icon" className="rounded-full">
                         <Avatar>
-                          <AvatarImage src={profileAvatarUrl || user.user_metadata?.avatar_url} alt={profileFirstName || user.user_metadata?.name || user.email} className="object-cover object-center" />
+                          <AvatarImage src={avatarSrc || undefined} onError={handleAvatarImgError} alt={profileFirstName || user?.user_metadata?.name || user?.email} className="object-cover object-center" />
                           <AvatarFallback>
-                            {profileFirstName?.[0] || user.user_metadata?.name?.[0] || user.email?.[0] || <UserCircleIcon className="h-6 w-6 text-muted-foreground" />}
+                            {profileFirstName?.[0] || user?.user_metadata?.name?.[0] || user?.email?.[0] || <UserCircleIcon className="h-6 w-6 text-muted-foreground" />}
                           </AvatarFallback>
                         </Avatar>
                       </Button>
@@ -564,12 +561,12 @@ import React, { useState, useEffect, useRef } from 'react';
                     <DropdownMenuContent ref={dropdownMenuRef} align="end" className="w-56 z-50">
                       <DropdownMenuLabel className="flex items-center gap-2">
                         <Avatar className="h-8 w-8">
-                          <AvatarImage src={profileAvatarUrl || user.user_metadata?.avatar_url} alt={profileFirstName || user.user_metadata?.name || user.email} className="object-cover object-center" />
+                          <AvatarImage src={avatarSrc || undefined} onError={handleAvatarImgError} alt={profileFirstName || user?.user_metadata?.name || user?.email} className="object-cover object-center" />
                           <AvatarFallback>
-                            {profileFirstName?.[0] || user.user_metadata?.name?.[0] || user.email?.[0] || <UserCircleIcon className="h-6 w-6 text-muted-foreground" />}
+                            {profileFirstName?.[0] || user?.user_metadata?.name?.[0] || user?.email?.[0] || <UserCircleIcon className="h-6 w-6 text-muted-foreground" />}
                           </AvatarFallback>
                         </Avatar>
-                        <span>{profileFirstName || user.user_metadata?.name || user.email?.split('@')[0] || 'User'}</span>
+                        <span>{profileFirstName || user?.user_metadata?.name || user?.email?.split('@')[0] || 'User'}</span>
                       </DropdownMenuLabel>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onClick={() => navigate('/dashboard')}>

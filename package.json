@@ -35,6 +35,8 @@
     "framer-motion": "^10.16.4",
     "lightweight-charts": "^5.1.0",
     "lucide-react": "^0.292.0",
+    "marked": "^17.0.1",
+    "dompurify": "^2.4.0",
     "node-fetch": "^3.3.2",
     "nodemailer": "^7.0.3",
     "p-limit": "^4.0.0",

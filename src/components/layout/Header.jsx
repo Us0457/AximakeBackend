@@ -1,33 +1,43 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/lib/supabaseClient';
 import { useNavigate } from 'react-router-dom';
 
 const Header = () => {
-  const { user } = useAuth();
+  const { user, profile, profileReady } = useAuth();
   const [profileRole, setProfileRole] = useState(null);
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
+  const [avatarSrc, setAvatarSrc] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const navigate = useNavigate();
 
+  // Use profile and profileReady from AuthContext (no direct DB queries in header)
   useEffect(() => {
-    if (!user) {
+    if (profileReady && profile) {
+      setProfileRole(profile.role || null);
+      setProfileAvatarUrl(profile.avatar_url || '');
+      setAvatarSrc(profile.avatar_url || '');
+    } else {
       setProfileRole(null);
+      setProfileAvatarUrl('');
+      setAvatarSrc('');
+    }
+  }, [profile, profileReady]);
+
+  function handleImgError(e) {
+    const img = e?.target;
+    if (!img) return;
+    const already = img.dataset?.proxied === '1';
+    const current = img.src || avatarSrc || '';
+    if (!already && current) {
+      const prox = `https://images.weserv.nl/?url=${encodeURIComponent(current)}&output=jpg&w=256&h=256&fit=cover`;
+      img.dataset.proxied = '1';
+      setAvatarSrc(prox);
+      img.src = prox;
       return;
     }
-    console.log('Current user.id:', user.id);
-    const fetchRole = async () => {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*') // fetch all columns for debugging
-        .eq('id', user.id)
-        .single();
-      console.log('Supabase fetchRole:', { data, error });
-      if (!error && data) setProfileRole(data.role);
-      else setProfileRole(null);
-      console.log('profileRole after fetch:', data?.role);
-    };
-    fetchRole();
-  }, [user]);
+    // final fallback
+    setAvatarSrc('');
+  }
 
   return (
     <header className="bg-white shadow">
@@ -67,8 +77,9 @@ const Header = () => {
                 >
                   <span className="sr-only">Open user menu</span>
                   <img
-                    src={user.user_metadata.avatar_url || '/default-avatar.png'}
+                    src={avatarSrc || '/default-avatar.png'}
                     alt="User Avatar"
+                    onError={handleImgError}
                     className="w-8 h-8 rounded-full"
                   />
                 </button>

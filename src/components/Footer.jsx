@@ -29,7 +29,7 @@ const Footer = () => {
       {/* Main Footer Grid */}
       <div className="bg-gradient-to-b from-white/95 to-neutral-200/95 border-t border-slate-200">
         <div className="container mx-auto px-4 sm:px-6 lg:px-6 py-10 md:py-12">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-8">
             {/* Column 1 - Brand */}
             <div>
                 <Link to="/" className="flex items-center space-x-3 mb-3">
@@ -52,11 +52,11 @@ const Footer = () => {
                 <div className="mt-2" />
               </details>
               <ul className="space-y-2 text-sm text-slate-700">
-                <li><Link to="/dashboard" className="hover:text-slate-900 transition">Dashboard</Link></li>
-                <li><Link to="/orders" className="hover:text-slate-900 transition">Orders</Link></li>
-                <li><Link to="/payments" className="hover:text-slate-900 transition">Payments &amp; Cards</Link></li>
-                <li><Link to="/cart" className="hover:text-slate-900 transition">Cart</Link></li>
-                <li><Link to="/wishlist" className="hover:text-slate-900 transition">Wishlist</Link></li>
+                <li><Link to="/dashboard" className="hover:text-blue-900 transition">Dashboard</Link></li>
+                <li><Link to="/dashboard/orders" className="hover:text-blue-900 transition">Orders</Link></li>
+                <li><Link to="/payments" className="hover:text-blue-900 transition">Payments &amp; Cards</Link></li>
+                <li><Link to="/cart" className="hover:text-blue-900 transition">Cart</Link></li>
+                <li><Link to="/dashboard/wishlist" className="hover:text-blue-900 transition">Wishlist</Link></li>
               </ul>
             </div>
 
@@ -68,14 +68,29 @@ const Footer = () => {
                 <div className="mt-2" />
               </details>
               <ul className="space-y-2 text-sm text-slate-700">
-                <li><Link to="/3d-printing" className="hover:text-slate-900 transition font-medium">3D Printing Service</Link></li>
-                <li><Link to="/custom-print" className="hover:text-slate-900 transition font-medium">Custom Prints</Link></li>
-                <li><Link to="/ecad-upload" className="hover:text-slate-900 transition font-medium">ECAD Upload Tool</Link></li>
-                <li><Link to="/about" className="hover:text-slate-900 transition">About Us</Link></li>
+                <li><Link to="/3d-printing" className="hover:text-blue-900 transition font-medium">3D Printing Service</Link></li>
+                <li><Link to="/custom-print" className="hover:text-blue-900 transition font-medium">Custom Prints</Link></li>
+                <li><Link to="/ecad-upload" className="hover:text-blue-900 transition font-medium">ECAD Upload Tool</Link></li>
+                <li><Link to="/about" className="hover:text-blue-900 transition">About Us</Link></li>
               </ul>
             </div>
 
-            {/* Column 4 - Policies & Help + Social */}
+            {/* Column 4 - Blog */}
+            <div>
+              <h4 className="text-sm font-semibold text-slate-900 mb-3 hidden md:block">Blog</h4>
+              <details className="md:hidden">
+                <summary className="text-sm font-semibold text-slate-900 mb-2">Blog</summary>
+                <div className="mt-2" />
+              </details>
+              <ul className="space-y-2 text-sm text-slate-700 mb-4">
+                <li><Link to="/blog/infill" className="hover:text-blue-900 transition">What is infill in 3D printing?</Link></li>
+                <li><Link to="/blog/pricing" className="hover:text-blue-900 transition">How is 3D print cost calculated?</Link></li>
+                <li><Link to="/blog/materials" className="hover:text-blue-900 transition">Which 3D printing material should I choose?</Link></li>
+                <li><Link to="/blog/what-is-3d-printing" className="hover:text-blue-900 transition">What is 3D printing?</Link></li>
+              </ul>
+            </div>
+
+            {/* Column 5 - Policies & Help + Social */}
             <div>
               <h4 className="text-sm font-semibold text-slate-900 mb-3 hidden md:block">Policies &amp; Help</h4>
               <details className="md:hidden">
@@ -83,12 +98,12 @@ const Footer = () => {
                 <div className="mt-2" />
               </details>
               <ul className="space-y-2 text-sm text-slate-700 mb-4">
-                <li><Link to="/terms-and-conditions" className="hover:text-slate-900 transition">Terms &amp; Conditions</Link></li>
-                <li><Link to="/privacy-policy" className="hover:text-slate-900 transition">Privacy Policy</Link></li>
-                <li><Link to="/shipping-policy" className="hover:text-slate-900 transition">Shipping Policy</Link></li>
-                <li><Link to="/refunds" className="hover:text-slate-900 transition">Refund &amp; Returns</Link></li>
-                <li><Link to="/faq" className="hover:text-slate-900 transition">FAQs</Link></li>
-                <li><Link to="/support/forum" className="hover:text-slate-900 transition">Tech Support Forum</Link></li>
+                <li><Link to="/terms-and-conditions" className="hover:text-blue-900 transition">Terms &amp; Conditions</Link></li>
+                <li><Link to="/privacy-policy" className="hover:text-blue-900 transition">Privacy Policy</Link></li>
+                <li><Link to="/shipping-policy" className="hover:text-blue-900 transition">Shipping Policy</Link></li>
+                <li><Link to="/refunds" className="hover:text-blue-900 transition">Refund &amp; Returns</Link></li>
+                <li><Link to="/faq" className="hover:text-blue-900 transition">FAQs</Link></li>
+                <li><Link to="/support/forum" className="hover:text-blue-900 transition">Tech Support Forum</Link></li>
               </ul>
 
               <div className="flex items-center gap-4">

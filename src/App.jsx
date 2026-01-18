@@ -41,6 +41,15 @@ import React, { useEffect } from 'react';
     import CouponsManagementPage from '@/pages/admin/CouponsManagementPage';
     import ShippingPolicy from '@/pages/ShippingPolicy';
     import RefundsPolicy from '@/pages/RefundsPolicy';
+    import BlogLandingPage from '@/pages/BlogLandingPage';
+    import WhatIs3DPrinting from '@/pages/blog/WhatIs3DPrinting';
+    import InfillBlog from '@/pages/blog/InfillBlog';
+    import Pricing3DPrints from '@/pages/blog/Pricing3DPrints';
+    import Materials3DPrint from '@/pages/blog/Materials3DPrint';
+    import CustomPrinting from '@/pages/blog/CustomPrinting';
+    import ElectronicsKits from '@/pages/blog/ElectronicsKits';
+    import BusinessUse from '@/pages/blog/BusinessUse';
+    import FAQPage from '@/pages/FAQPage';
     import './index.css';
 
     function ScrollToTop() {
@@ -124,6 +133,15 @@ import React, { useEffect } from 'react';
                 <Route path="/support/forum" element={<SupportForumPage />} />
                 <Route path="/support/forum/:id" element={<SupportThreadPage />} />
                 <Route path="/admin/coupons" element={<CouponsManagementPage />} />
+                <Route path="/blog" element={<BlogLandingPage />} />
+                <Route path="/blog/what-is-3d-printing" element={<WhatIs3DPrinting />} />
+                <Route path="/blog/infill" element={<InfillBlog />} />
+                <Route path="/blog/pricing" element={<Pricing3DPrints />} />
+                <Route path="/blog/materials" element={<Materials3DPrint />} />
+                <Route path="/blog/custom-printing" element={<CustomPrinting />} />
+                <Route path="/blog/electronics-kits" element={<ElectronicsKits />} />
+                <Route path="/blog/business-use" element={<BusinessUse />} />
+                <Route path="/faq" element={<FAQPage />} />
               </Routes>
             </Layout>
             <Toaster />

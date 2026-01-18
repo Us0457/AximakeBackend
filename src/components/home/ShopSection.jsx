@@ -22,7 +22,7 @@ const LEFT_CATEGORY_IMAGES = {
 // Layout constants shared between carousel and left image
 const CARD_WIDTH = 220; // fixed px width for each carousel item wrapper
 const CARD_HEIGHT = 320; // fixed px total height for each card
-const IMAGE_HEIGHT = 220; // fixed px height for product image area
+const IMAGE_HEIGHT = 210; // fixed px height for product image area
 
 // Left image fallback: use a per-category image if present, otherwise render the SVG anchor
 const LeftFallback = ({ src = '/assets/categories/left-fallback.jpg', alt = 'Category image' } = {}) => {
