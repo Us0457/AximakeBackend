@@ -30,6 +30,10 @@ services:
         value: "<SET_IN_DASHBOARD>"
       - key: VITE_API_BASE_URL
         value: "https://aximake-backend.onrender.com"
+      - key: CONTACT_RECIPIENT
+        value: "<SET_IN_DASHBOARD>"
+      - key: RESEND_API_KEY
+        value: "<SET_IN_DASHBOARD>"
       - key: PORT
         value: "5050"
 

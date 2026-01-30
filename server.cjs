@@ -2,6 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const nodemailer = require('nodemailer');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 // shiprocketService is an ES module; we'll dynamically import it at startup
 let createShipment, downloadInvoice, printAndDownloadInvoice, getTracking, generateAWB, getShipmentStatus, getOrderDetails, getShipmentDetails, getLabel, cancelOrders, fetchInvoiceUrlRaw;
 const { createClient } = require('@supabase/supabase-js');
@@ -9,6 +11,192 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Route-scoped parsers for legacy PHP-style form POSTs
+const urlencodedParser = express.urlencoded({ extended: false });
+
+function setPhpCompatCors(res, allowHeaders = 'Content-Type') {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', allowHeaders);
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+}
+
+function looksLikeEmail(email) {
+  if (typeof email !== 'string') return false;
+  const trimmed = email.trim();
+  if (!trimmed) return false;
+  // Similar strictness to PHP's FILTER_VALIDATE_EMAIL for common cases
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
+}
+
+function escapeHtml(input) {
+  return String(input ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function nl2br(text) {
+  return String(text ?? '').replace(/\r\n|\r|\n/g, '<br>');
+}
+
+function formatInr(amount) {
+  const n = Number(amount) || 0;
+  return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+async function resendSendEmail(payload) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    throw new Error('RESEND_API_KEY not set');
+  }
+  if (typeof fetch !== 'function') {
+    throw new Error('Global fetch is not available in this Node runtime');
+  }
+
+  const resp = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  let data = null;
+  try {
+    data = await resp.json();
+  } catch (e) {
+    data = null;
+  }
+  if (!resp.ok) {
+    const msg = (data && (data.message || data.error)) ? (data.message || data.error) : `Resend API error (HTTP ${resp.status})`;
+    throw new Error(msg);
+  }
+  return data;
+}
+
+async function generateInvoicePdfBufferFromHtml(html) {
+  // NOTE: Intentionally not implemented via HTML rendering in Node.
+  // The production Node service should not rely on heavyweight headless browsers.
+  // Kept for backward compatibility with older code paths.
+  throw new Error('HTML-to-PDF is not available');
+}
+
+function generateInvoicePdfBuffer({
+  orderId,
+  invoiceDateStr,
+  paymentMethod,
+  shippingMethod,
+  billingInfo,
+  shippingInfo,
+  items,
+  subtotal,
+  shipping,
+  gst,
+  total
+}) {
+  const PDFDocument = require('pdfkit');
+
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 40 });
+      const chunks = [];
+      doc.on('data', (c) => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+
+      doc.fontSize(18).text('Aximake', { continued: false });
+      doc.moveDown(0.25);
+      doc.fontSize(10).fillColor('#444').text('123, Industrial Area, Bengaluru, Karnataka, 560001, India');
+      doc.text('Email: info@aximake.in');
+      doc.text('Website: aximake.in');
+      doc.text('GSTIN: 29ABCDE1234F1Z5');
+
+      doc.fillColor('#000');
+      doc.moveUp(4);
+      doc.fontSize(14).text('INVOICE', 0, 40, { align: 'right' });
+      doc.fontSize(10).text(`Invoice #: ${orderId}`, { align: 'right' });
+      doc.text(`Date: ${invoiceDateStr}`, { align: 'right' });
+      doc.moveDown(2);
+
+      doc.fontSize(10).text(`Payment Method: ${paymentMethod}`);
+      doc.text(`Shipping Method: ${shippingMethod}`);
+      doc.moveDown(1);
+
+      const leftX = doc.x;
+      const colGap = 20;
+      const colWidth = (doc.page.width - doc.page.margins.left - doc.page.margins.right - colGap) / 2;
+      const topY = doc.y;
+      doc.fontSize(11).text('Billing Address', leftX, topY, { width: colWidth, underline: true });
+      doc.text('Shipping Address', leftX + colWidth + colGap, topY, { width: colWidth, underline: true });
+      doc.moveDown(0.5);
+      const addrY = doc.y;
+      doc.fontSize(9).text(String(billingInfo || '').replace(/<br>/gi, '\n'), leftX, addrY, { width: colWidth });
+      doc.text(String(shippingInfo || '').replace(/<br>/gi, '\n'), leftX + colWidth + colGap, addrY, { width: colWidth });
+      doc.moveDown(4);
+
+      // Items table
+      const tableTop = doc.y;
+      const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const cols = {
+        idx: { x: doc.page.margins.left, w: 30 },
+        name: { x: doc.page.margins.left + 30, w: pageWidth - (30 + 50 + 80 + 80) },
+        qty: { x: doc.page.margins.left + 30 + (pageWidth - (30 + 50 + 80 + 80)), w: 50 },
+        unit: { x: doc.page.margins.left + 30 + (pageWidth - (30 + 50 + 80 + 80)) + 50, w: 80 },
+        total: { x: doc.page.margins.left + 30 + (pageWidth - (30 + 50 + 80 + 80)) + 50 + 80, w: 80 }
+      };
+
+      doc.fontSize(9).fillColor('#000');
+      doc.text('#', cols.idx.x, tableTop, { width: cols.idx.w });
+      doc.text('Product Name', cols.name.x, tableTop, { width: cols.name.w });
+      doc.text('Qty', cols.qty.x, tableTop, { width: cols.qty.w });
+      doc.text('Unit Price', cols.unit.x, tableTop, { width: cols.unit.w, align: 'right' });
+      doc.text('Total', cols.total.x, tableTop, { width: cols.total.w, align: 'right' });
+      doc.moveDown(0.5);
+      doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.margins.left + pageWidth, doc.y).strokeColor('#ddd').stroke();
+      doc.moveDown(0.5);
+
+      const safeItems = Array.isArray(items) ? items : [];
+      let rowY = doc.y;
+      safeItems.forEach((item, idx) => {
+        const qty = Number(item?.quantity ?? 1) || 1;
+        const unit = Number(item?.price ?? 0) || 0;
+        const rowTotal = qty * unit;
+        const name = String(item?.name ?? item?.file_name ?? 'Item');
+
+        doc.fontSize(9).fillColor('#000');
+        doc.text(String(idx + 1), cols.idx.x, rowY, { width: cols.idx.w });
+        doc.text(name, cols.name.x, rowY, { width: cols.name.w });
+        doc.text(String(qty), cols.qty.x, rowY, { width: cols.qty.w });
+        doc.text(`₹${formatInr(unit)}`, cols.unit.x, rowY, { width: cols.unit.w, align: 'right' });
+        doc.text(`₹${formatInr(rowTotal)}`, cols.total.x, rowY, { width: cols.total.w, align: 'right' });
+        rowY = doc.y + 6;
+      });
+
+      doc.moveDown(1);
+      doc.strokeColor('#ddd');
+      doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.margins.left + pageWidth, doc.y).stroke();
+      doc.moveDown(1);
+
+      // Summary
+      const summaryX = doc.page.margins.left + pageWidth - 220;
+      doc.fontSize(10).text(`Subtotal: ₹${formatInr(subtotal)}`, summaryX, doc.y, { width: 220, align: 'right' });
+      doc.text(`Shipping: ₹${formatInr(shipping)}`, summaryX, doc.y, { width: 220, align: 'right' });
+      doc.text(`GST (18%): ₹${formatInr(gst)}`, summaryX, doc.y, { width: 220, align: 'right' });
+      doc.fontSize(11).text(`Total: ₹${formatInr(total)}`, summaryX, doc.y, { width: 220, align: 'right' });
+
+      doc.moveDown(2);
+      doc.fontSize(9).fillColor('#666').text('Thank you for choosing Aximake', { align: 'center' });
+      doc.text('For support, contact info@aximake.in', { align: 'center' });
+
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
 
 // Basic health endpoint for Render/Internal checks
 app.get('/api/health', (req, res) => {
@@ -271,6 +459,403 @@ app.post('/api/contact', async (req, res) => {
     res.status(200).json({ success: true, message: 'Email sent!' });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to send email', error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Legacy PHP mailer compatibility endpoints (transport migrated to Resend)
+// - Preserve the same request flow, validation, and responses as the PHP scripts
+// - Only replace the email transport mechanism
+// ---------------------------------------------------------------------------
+
+app.options('/send-email.php', (req, res) => {
+  setPhpCompatCors(res, 'Content-Type');
+  res.status(200).send('');
+});
+
+app.all('/send-email.php', (req, res, next) => {
+  // Mirror PHP behavior: explicitly return 405 for non-POST
+  if (req.method !== 'POST' && req.method !== 'OPTIONS') {
+    setPhpCompatCors(res, 'Content-Type');
+    return res.status(405).json({ success: false, message: 'Method not allowed.' });
+  }
+  next();
+});
+
+app.post('/send-email.php', urlencodedParser, async (req, res) => {
+  setPhpCompatCors(res, 'Content-Type');
+  res.setHeader('Content-Type', 'application/json');
+
+  // 1) INPUT VALIDATION (match public/send-email.php)
+  const nameRaw = String(req.body?.name ?? req.body?.['home-contact-name'] ?? '').trim();
+  const emailRaw = String(req.body?.email ?? req.body?.['home-contact-email'] ?? '').trim();
+  const messageRaw = String(req.body?.message ?? req.body?.['home-contact-message'] ?? '').trim();
+
+  if (!nameRaw || !emailRaw || !messageRaw) {
+    return res.status(400).json({ success: false, message: 'All fields are required.' });
+  }
+  if (!looksLikeEmail(emailRaw)) {
+    return res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
+  }
+
+  // Prevent header injection / preserve PHP sanitization intent
+  const safeName = escapeHtml(nameRaw);
+  const safeEmail = emailRaw.replace(/[\r\n]/g, '').trim();
+  const safeMessage = escapeHtml(messageRaw);
+
+  // 2) MAIL SETUP (mirror env usage from PHP)
+  const smtpUserFallback = process.env.SMTP_USER || 'admin@aximake.in';
+  const fromName = process.env.SMTP_FROM_NAME || 'Aximake 3D Printing';
+  const from = process.env.SMTP_FROM || smtpUserFallback;
+  const to = process.env.CONTACT_RECIPIENT || smtpUserFallback;
+  const support = process.env.SUPPORT_EMAIL;
+
+  // 3) EMAIL CONTENT (mirror PHP HTML)
+  const subject = 'New Contact Form Message – Aximake';
+  const bodyHtml =
+    "<div style='font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:20px;border:1px solid #e2e8f0;border-radius:8px;'>" +
+    "<h2 style='color:#2d3748;'>New Contact Form Submission</h2>" +
+    `<p><strong>Name:</strong> ${safeName}</p>` +
+    `<p><strong>Email:</strong> ${escapeHtml(safeEmail)}</p>` +
+    "<p><strong>Message:</strong></p>" +
+    `<p style='white-space:pre-line;'>${nl2br(safeMessage)}</p>` +
+    "<hr style='margin-top:24px;'>" +
+    "<p style='font-size:13px;color:#718096;'>Sent from aximake.in contact form</p>" +
+    "</div>";
+
+  const altText = `New Contact Form Submission\n\nName: ${nameRaw}\nEmail: ${emailRaw}\n\nMessage:\n${messageRaw}\n`;
+
+  try {
+    const payload = {
+      from: `${fromName} <${from}>`,
+      to,
+      subject,
+      html: bodyHtml,
+      text: altText,
+      reply_to: `${nameRaw} <${safeEmail}>`
+    };
+    if (support && support !== to) {
+      payload.bcc = support;
+    }
+
+    await resendSendEmail(payload);
+    return res.status(200).json({
+      success: true,
+      message: 'Thank you for contacting us. Your message has been sent successfully.'
+    });
+  } catch (e) {
+    const errMsg = e?.message || String(e);
+    try {
+      const logPath = path.join(__dirname, 'public', 'email-error.log');
+      fs.appendFileSync(logPath, `${new Date().toISOString()} - ${errMsg}\n`);
+    } catch (_) {}
+
+    return res.status(500).json({
+      success: false,
+      message: 'Your message could not be sent at this time.',
+      error: errMsg
+    });
+  }
+});
+
+app.options('/order-status-email.php', (req, res) => {
+  setPhpCompatCors(res, 'Content-Type, X-PHP-INVOKE-TOKEN');
+  res.status(200).send('');
+});
+
+app.all('/order-status-email.php', (req, res, next) => {
+  if (req.method !== 'POST' && req.method !== 'OPTIONS') {
+    setPhpCompatCors(res, 'Content-Type, X-PHP-INVOKE-TOKEN');
+    res.status(405).send('Method Not Allowed');
+    return;
+  }
+  next();
+});
+
+app.post('/order-status-email.php', urlencodedParser, async (req, res) => {
+  setPhpCompatCors(res, 'Content-Type, X-PHP-INVOKE-TOKEN');
+
+  // Token gate (match PHP behavior)
+  const expectedToken = process.env.PHP_INVOKE_TOKEN || '';
+  if (expectedToken) {
+    const incoming = String(req.headers['x-php-invoke-token'] || '').trim();
+    if (incoming !== expectedToken) {
+      res.status(403).send('Forbidden');
+      return;
+    }
+  }
+
+  const to = String(req.body?.to ?? req.body?.email ?? '').trim();
+  const name = String(req.body?.name ?? 'Customer');
+  const orderId = String(req.body?.order_id ?? '').trim();
+  const status = String(req.body?.status ?? '').trim();
+  const subjectIn = String(req.body?.subject ?? '').trim();
+  const messageIn = String(req.body?.message ?? '').trim();
+
+  if (!to || !looksLikeEmail(to)) {
+    res.status(400).send('Invalid or missing recipient email address.');
+    return;
+  }
+
+  const isGeneric = !!(subjectIn && messageIn && !orderId && !status);
+
+  const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER || 'admin@aximake.in';
+  const fromName = process.env.SMTP_FROM_NAME || 'Aximake 3D Printing';
+  const logoImgHtml = '<img src="https://aximake.in/assets/BrandLogo.png" alt="Aximake" style="height:48px;margin-bottom:8px;" />';
+
+  try {
+    let emailSubject = '';
+    let htmlBody = '';
+    let textBody = '';
+    let attachments = undefined;
+
+    if (isGeneric) {
+      emailSubject = subjectIn;
+      htmlBody =
+        '<div style="font-family:sans-serif;max-width:600px;margin:auto;padding:32px 24px;border-radius:10px;background:#f7fafc;border:1px solid #e2e8f0;">'
+          + '<div style="text-align:center;margin-bottom:24px;">'
+            + logoImgHtml
+            + `<h2 style="color:#2d3748;margin:0;font-size:1.5rem;">${escapeHtml(subjectIn)}</h2>`
+          + '</div>'
+          + `<p style="font-size:1.1rem;">Hi ${escapeHtml(name)},</p>`
+          + `<p>${nl2br(escapeHtml(messageIn))}</p>`
+          + '<hr style="margin:32px 0 24px 0;border:none;border-top:1px solid #e2e8f0;" />'
+          + '<p style="font-size:0.97rem;color:#4a5568;">If you have any questions or need assistance, simply reply to this email or contact us at <a href="mailto:admin@aximake.in" style="color:#3182ce;">admin@aximake.in</a>.</p>'
+          + '<p style="margin-top:24px;font-size:0.97rem;color:#718096;">Thank you for choosing Aximake 3D Printing.<br>The Aximake Team</p>'
+        + '</div>';
+      textBody = messageIn;
+    } else {
+      if (!orderId || !status) {
+        res.status(400).send('Missing order_id or status for order status email.');
+        return;
+      }
+
+      const statusKey = String(status).toLowerCase();
+      const statusSubjects = {
+        confirmation: 'Order Confirmation',
+        processing: 'Order Processing',
+        shipping: 'Order Shipped',
+        cancelled: 'Order Cancelled',
+        delivered: 'Order Delivered'
+      };
+      emailSubject = statusSubjects[statusKey] || 'Order Update';
+
+      const statusMessages = {
+        confirmation: `Thank you for your order! Your order #${orderId} has been received.`,
+        processing: `Your order #${orderId} is now being processed.`,
+        shipping: `Good news! Your order #${orderId} has shipped.`,
+        cancelled: `We're sorry, but your order #${orderId} has been cancelled.`,
+        delivered: `Your order #${orderId} has been delivered. Thank you for shopping with us!`
+      };
+      const mainMessage = statusMessages[statusKey] || `Order update for order #${orderId}.`;
+
+      // Items
+      let itemsArr = [];
+      if (req.body?.items) {
+        try {
+          const decoded = JSON.parse(String(req.body.items));
+          if (Array.isArray(decoded)) itemsArr = decoded;
+        } catch (_) {}
+      }
+
+      const supabaseBase = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+      const renderOrderItemsHtml = (items) => {
+        if (!Array.isArray(items) || !items.length) return '<div style="color:#888;">No items found in this order.</div>';
+        let html = '';
+        for (const item of items) {
+          const itemName = escapeHtml(item?.name ?? item?.file_name ?? 'Item');
+          const qty = Number(item?.quantity ?? 1) || 1;
+
+          let img = item?.images ?? item?.image ?? '';
+          if (Array.isArray(img)) img = img[0] ?? '';
+          if (typeof img === 'string' && img.includes(',')) img = img.split(',')[0];
+          img = String(img || '').trim();
+          img = img.replace(/^[\[\]'{\}"]+|[\[\]'{\}"]+$/g, '');
+          if (img && !/^https?:\/\//i.test(img)) {
+            if (supabaseBase) {
+              img = `${supabaseBase}/storage/v1/object/public/product-images/${String(img).replace(/^products\//, 'products/').replace(/^\//, '')}`;
+            } else {
+              img = 'https://aximake.in/assets/product-placeholder.png';
+            }
+          }
+          const imgTag = `<img src="${escapeHtml(img)}" alt="${itemName}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;" />`;
+
+          html += '<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin-bottom:12px;">'
+            + '<tr>'
+            + `<td width="72" valign="top" style="padding-right:8px;">${imgTag}</td>`
+            + '<td valign="top" style="font-size:14px;color:#2d3748;">'
+            + `<div style="font-weight:600;margin-bottom:4px;">${itemName}</div>`
+            + `<div style="font-size:12px;color:#6b7280;">Quantity: ${qty}</div>`
+            + '</td>'
+            + '</tr>'
+            + '</table>';
+        }
+        return html;
+      };
+
+      let orderDetails = `<p style="margin:16px 0 0 0;"><strong>Order ID:</strong> ${escapeHtml(orderId)}</p>`;
+      if (itemsArr.length) {
+        orderDetails += '<div style="margin-top:18px;margin-bottom:8px;font-weight:bold;color:#6366f1;">Order Items</div>';
+        orderDetails += renderOrderItemsHtml(itemsArr);
+      }
+
+      const statusInstructions = {
+        confirmation: '<p style="margin:16px 0 0 0;">We are excited to let you know that your order has been received and is now being reviewed by our team. You will receive further updates as your order progresses.</p>',
+        processing: '<p style="margin:16px 0 0 0;">Our team is currently preparing your order. We will notify you once it has shipped. If you have any questions or need to make changes, please contact us as soon as possible.</p>',
+        shipping: '<p style="margin:16px 0 0 0;">Your order is on its way! You will receive tracking information (if available) soon. Thank you for your patience.</p>',
+        cancelled: '<p style="margin:16px 0 0 0;">If you have any questions about this cancellation or would like to place a new order, please contact us.</p>',
+        delivered: '<p style="margin:16px 0 0 0;">We hope you enjoy your purchase! If you have any feedback or need support, please let us know.</p>'
+      };
+      const instructions = statusInstructions[statusKey] || '';
+
+      // View Order button (match PHP conditions)
+      const statusNormalized = String(status).toLowerCase().replace(/[^a-z0-9]+/gi, '_');
+      const orderCode = String(req.body?.order_code ?? '').trim();
+      const hasOrderRef = !!(orderId || orderCode);
+      const showButton = (statusNormalized === 'shipped' && hasOrderRef);
+      let viewOrderButton = '';
+      if (showButton) {
+        const siteBase = String(process.env.SITE_BASE_URL || process.env.APP_URL || 'https://aximake.in').replace(/\/$/, '');
+        const orderLink = orderCode ? `${siteBase}/orders/${encodeURIComponent(orderCode)}` : `${siteBase}/orders/${encodeURIComponent(orderId)}`;
+        viewOrderButton = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:18px 0 22px 0;">'
+          + `<a href="${escapeHtml(orderLink)}" style="background:#4f46e5;color:#ffffff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block;font-weight:600;">View Order</a>`
+          + '</td></tr></table>';
+      }
+
+      htmlBody = '<div style="font-family:sans-serif;max-width:600px;margin:auto;padding:32px 24px;border-radius:10px;background:#f7fafc;border:1px solid #e2e8f0;">'
+        + '<div style="text-align:center;margin-bottom:24px;">'
+          + logoImgHtml
+          + `<h2 style="color:#2d3748;margin:0;font-size:1.5rem;">${escapeHtml(emailSubject)}</h2>`
+        + '</div>'
+        + `<p style="font-size:1.1rem;">Hi ${escapeHtml(name)},</p>`
+        + `<p>${escapeHtml(mainMessage)}</p>`
+        + orderDetails
+        + viewOrderButton
+        + instructions
+        + '<hr style="margin:32px 0 24px 0;border:none;border-top:1px solid #e2e8f0;" />'
+        + '<p style="font-size:0.97rem;color:#4a5568;">If you have any questions or need assistance, simply reply to this email or contact us at <a href="mailto:admin@aximake.in" style="color:#3182ce;">admin@aximake.in</a>.</p>'
+        + '<p style="margin-top:24px;font-size:0.97rem;color:#718096;">Thank you for choosing Aximake 3D Printing.<br>The Aximake Team</p>'
+      + '</div>';
+
+      textBody = `${mainMessage}\nOrder ID: ${orderId}\n\nIf you have any questions, contact admin@aximake.in.\nThank you for choosing Aximake 3D Printing.`;
+
+      // Save last HTML body like PHP does
+      try {
+        fs.writeFileSync(path.join(__dirname, 'public', 'last_email_body.html'), htmlBody);
+      } catch (_) {}
+
+      if (req.body?.dump_html) {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.status(200).send(htmlBody);
+        return;
+      }
+
+      const formatAddressBlock = (info) => {
+        let s = String(info || '');
+        // keep <br> only
+        s = s.replace(/<(?!br\s*\/?)[^>]+>/gi, '');
+        // first two commas -> <br>
+        let replaced = 0;
+        s = s.replace(/,\s?/g, (m) => {
+          replaced += 1;
+          if (replaced <= 2) return '<br>';
+          return ', ';
+        });
+        s = s.replace(/Phone:\s?/gi, '<br>Phone: ');
+        s = s.replace(/\?/g, '₹');
+        return s;
+      };
+
+      // Compose billing/shipping info
+      let billingInfo = '';
+      let shippingInfo = '';
+      if (req.body?.billing_info) {
+        billingInfo = nl2br(escapeHtml(String(req.body.billing_info)));
+      } else if (req.body?.address) {
+        try {
+          const addr = JSON.parse(String(req.body.address));
+          if (addr && typeof addr === 'object') {
+            billingInfo = `${escapeHtml(addr.name || '')}<br>${escapeHtml(addr.flat_no || '')}, ${escapeHtml(addr.area || '')}, ${escapeHtml(addr.city || '')}, ${escapeHtml(addr.state || '')} - ${escapeHtml(addr.pincode || '')}<br>Phone: ${escapeHtml(addr.phone || '')}`.trim();
+          }
+        } catch (_) {}
+      }
+      if (req.body?.shipping_info) {
+        shippingInfo = nl2br(escapeHtml(String(req.body.shipping_info)));
+      } else if (req.body?.address) {
+        try {
+          const addr = JSON.parse(String(req.body.address));
+          if (addr && typeof addr === 'object') {
+            shippingInfo = `${escapeHtml(addr.name || '')}<br>${escapeHtml(addr.flat_no || '')}, ${escapeHtml(addr.area || '')}, ${escapeHtml(addr.city || '')}, ${escapeHtml(addr.state || '')} - ${escapeHtml(addr.pincode || '')}<br>Phone: ${escapeHtml(addr.phone || '')}`.trim();
+          }
+        } catch (_) {}
+      }
+
+      // Build product rows and totals (match PHP order-status-email.php)
+      let productRows = '';
+      let subtotal = 0;
+      if (itemsArr.length) {
+        itemsArr.forEach((item, idx) => {
+          const qty = Number(item?.quantity ?? 1) || 1;
+          const unit = Number(item?.price ?? 0) || 0;
+          const rowTotal = qty * unit;
+          subtotal += rowTotal;
+          productRows += '<tr style="text-align:justify;">'
+            + `<td>${idx + 1}</td>`
+            + `<td>${escapeHtml(item?.name ?? item?.file_name ?? 'Item')}</td>`
+            + `<td>${qty}</td>`
+            + `<td>₹${formatInr(unit)}</td>`
+            + `<td>₹${formatInr(rowTotal)}</td>`
+            + '</tr>';
+        });
+      }
+      const shipping = 0;
+      const gst = Math.round((subtotal * 0.18) * 100) / 100;
+      const total = subtotal + shipping + gst;
+
+      const invoiceDate = new Date();
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const invoiceDateStr = `${String(invoiceDate.getDate()).padStart(2, '0')} ${months[invoiceDate.getMonth()]} ${invoiceDate.getFullYear()}`;
+
+      const pdfBuffer = await generateInvoicePdfBuffer({
+        orderId,
+        invoiceDateStr,
+        paymentMethod: 'Online',
+        shippingMethod: 'Standard',
+        billingInfo: formatAddressBlock(billingInfo),
+        shippingInfo: formatAddressBlock(shippingInfo),
+        items: itemsArr,
+        subtotal,
+        shipping,
+        gst,
+        total
+      });
+      const pdfFileName = `Invoice-${orderId}.pdf`;
+      attachments = [{ filename: pdfFileName, content: pdfBuffer.toString('base64'), content_type: 'application/pdf' }];
+    }
+
+    // Save the final HTML body for inspection like PHP does
+    try {
+      fs.writeFileSync(path.join(__dirname, 'public', 'last_email_body.html'), htmlBody);
+    } catch (_) {}
+
+    const payload = {
+      from: `${fromName} <${fromEmail}>`,
+      to,
+      subject: emailSubject,
+      html: htmlBody,
+      text: textBody
+    };
+    if (attachments) payload.attachments = attachments;
+
+    await resendSendEmail(payload);
+    res.status(200).send('success');
+  } catch (e) {
+    const errMsg = e?.message || String(e);
+    try {
+      const logPath = path.join(__dirname, 'public', 'email-error.log');
+      fs.appendFileSync(logPath, `${new Date().toISOString()} - Exception: ${errMsg}\n`);
+    } catch (_) {}
+    res.status(500).send(`Mailer Exception: ${errMsg}`);
   }
 });
 
