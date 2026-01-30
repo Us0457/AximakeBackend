@@ -30,13 +30,13 @@ import React from 'react';
       return (
       <motion.section 
         id="hero-section"
-        style={{ ...(outerStyle || {}), ...(headerOffsetStyle || {}) }}
-        className={`py-20 md:py-32 text-center bg-gradient-to-br from-primary/10 via-transparent to-accent/10 ${edgeToEdge ? 'rounded-none shadow-none' : 'rounded-xl shadow-xl'} overflow-hidden`}
+        style={{ ...(outerStyle || {}), ...(headerOffsetStyle || {}), ...(edgeToEdge ? { height: '100%' } : {}) }}
+        className={`text-center bg-gradient-to-br from-primary/10 via-transparent to-accent/10 ${edgeToEdge ? 'h-full py-0 md:py-0 rounded-none shadow-none' : 'py-20 md:py-32 rounded-xl shadow-xl'} overflow-hidden`}
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.8, ease: "easeOut" }}
       >
-        <div className={`${edgeToEdge ? 'w-full px-0' : 'container mx-auto px-4 sm:px-4 lg:px-6'}`}>
+            <div className={`${edgeToEdge ? 'w-full px-4 sm:px-6 lg:px-8' : 'container mx-auto px-4 sm:px-4 lg:px-6'} ${edgeToEdge ? 'h-full flex flex-col justify-center min-h-0' : ''}`}>
           <motion.h1 
             className="text-5xl md:text-7xl font-bold mb-6"
             initial={{ y: -30, opacity: 0 }}

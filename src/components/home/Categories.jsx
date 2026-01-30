@@ -13,16 +13,17 @@ const categories = [
 const Categories = ({ edgeToEdge = false }) => (
   <motion.section
     id="categories"
-    className="pt-4 md:pt-6 pb-8 md:pb-8 bg-gradient-to-b from-white/95 to-neutral-200/95"
+    className="pt-4 md:pt-6 pb-8 md:pb-8 bg-gradient-to-b from-white/95 to-neutral-200/95 full-bleed-section"
     variants={containerVariants}
     initial="hidden"
     whileInView="visible"
     viewport={{ once: true, amount: 0.2 }}
   >
+    <style>{`#categories.full-bleed-section{width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw);} `}</style>
     <div className={edgeToEdge ? 'w-full' : 'container mx-auto'} style={edgeToEdge ? { width: '100vw', marginLeft: 'calc(50% - 50vw)', marginRight: 'calc(50% - 50vw)' } : undefined}>
       <div className={`${edgeToEdge ? 'px-0' : 'px-2 sm:px-4 lg:px-6'} max-w-6xl mx-auto`}> 
         <motion.div variants={itemVariants} className="text-center mb-4 md:mb-6">
-          <h2 className="text-xl md:text-2xl font-bold text-neutral-900">Categories</h2>
+          <h2 className="text-xl md:text-2xl font-bold text-neutral-900">Capabilities at a Glance</h2>
           <p className="text-sm md:text-base text-neutral-600 mt-1">Explore what you can build with Aximake</p>
         </motion.div>
 

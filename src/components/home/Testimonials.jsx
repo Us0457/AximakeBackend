@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
     import { Card, CardTitle, CardDescription } from '@/components/ui/card';
     import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-    import { motion } from 'framer-motion';
+    import { motion, AnimatePresence } from 'framer-motion';
     import { containerVariants, itemVariants } from '@/components/home/motionVariants';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -16,13 +16,16 @@ import { supabase } from '@/lib/supabaseClient';
     const Testimonials = () => {
       const [testimonials, setTestimonials] = useState(FALLBACK_TESTIMONIALS);
       const [current, setCurrent] = useState(0);
+      const [dir, setDir] = useState(1); // 1 = next (enter from right), -1 = prev (enter from left)
+      const prevRef = useRef(0);
       const [paused, setPaused] = useState(false);
       const timeoutRef = useRef(null);
-      const dragThreshold = 80; // px to trigger swipe
+      const dragThreshold = 60; // px to trigger swipe
 
       useEffect(() => {
         if (!paused && testimonials.length > 0) {
           timeoutRef.current = setTimeout(() => {
+            setDir(1);
             setCurrent((prev) => (prev + 1) % testimonials.length);
           }, AUTO_SCROLL_INTERVAL);
         }
@@ -44,6 +47,7 @@ import { supabase } from '@/lib/supabaseClient';
             if (!mounted) return;
             if (Array.isArray(data) && data.length > 0) {
               setTestimonials(data);
+              setDir(1);
               setCurrent(0);
             }
           } catch (err) {
@@ -61,6 +65,10 @@ import { supabase } from '@/lib/supabaseClient';
         if (current >= testimonials.length) setCurrent(0);
       }, [testimonials, current]);
 
+      // Track previous index only; `dir` is set explicitly where we change `current` to avoid
+      // conflicting updates that cause snap-back/jitter during swipe interactions.
+      useEffect(() => { prevRef.current = current; }, [current]);
+
       return (
         <motion.section
           id="testimonials-section"
@@ -72,40 +80,46 @@ import { supabase } from '@/lib/supabaseClient';
         >
           <div className="container mx-auto px-2 sm:px-4 lg:px-6">
             <motion.h2 variants={itemVariants} className="text-3xl md:text-4xl font-bold text-center mb-12">What Our Clients Say</motion.h2>
-            <div className="relative max-w-xl mx-auto">
-              <motion.div
-                key={current}
-                initial={{ opacity: 0, y: 40 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -40 }}
-                transition={{ duration: 0.6, type: 'spring' }}
-                onMouseEnter={() => setPaused(true)}
-                onMouseLeave={() => setPaused(false)}
-                className="flex flex-col items-center"
-                style={{ minHeight: 340, touchAction: 'pan-y', willChange: 'transform' }}
-                // Allow horizontal drag on the single centered card.
-                drag="x"
-                dragConstraints={{ left: 0, right: 0 }}
-                dragElastic={0.15}
-                dragMomentum={false}
-                // lock Y while dragging to avoid vertical jitter from simultaneous y animations
-                whileDrag={{ y: 0 }}
-                onDragStart={() => setPaused(true)}
-                onDragEnd={(event, info) => {
-                  // info.offset.x indicates px dragged. Positive = right swipe (previous), Negative = left swipe (next)
-                  const offsetX = info.offset.x;
-                  // Defer index update to allow the drag release to settle and avoid a visual "jerk" when the
-                  // motion component immediately re-renders with exit/enter y-animations. Using rAF gives
-                  // the browser one frame to settle the pointer release which significantly reduces perceived jank.
-                  if (offsetX > dragThreshold) {
-                    requestAnimationFrame(() => setCurrent((prev) => (prev - 1 + testimonials.length) % testimonials.length));
-                  } else if (offsetX < -dragThreshold) {
-                    requestAnimationFrame(() => setCurrent((prev) => (prev + 1) % testimonials.length));
-                  }
-                  // release pause after drag completes
-                  setPaused(false);
-                }}
-              >
+            <div className="relative max-w-xl mx-auto h-[340px] overflow-hidden">
+              <AnimatePresence initial={false} custom={dir}>
+                <motion.div
+                  key={current}
+                  initial={{ opacity: 0, x: `${dir * 100}%` }}
+                  animate={{ opacity: 1, x: '0%' }}
+                  exit={{ opacity: 0, x: `${-dir * 100}%` }}
+                  transition={{ type: 'spring', stiffness: 280, damping: 30 }}
+                  onMouseEnter={() => setPaused(true)}
+                  onMouseLeave={() => setPaused(false)}
+                  className="flex flex-col items-center"
+                  style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '100%', touchAction: 'pan-y', willChange: 'transform' }}
+                  // Allow horizontal drag on the single centered card.
+                  drag="x"
+                  dragElastic={0.12}
+                  dragMomentum={true}
+                  // lock Y while dragging to avoid vertical jitter from simultaneous y animations
+                  whileDrag={{ y: 0 }}
+                  onDragStart={() => setPaused(true)}
+                  onDragEnd={(event, info) => {
+                    const offsetX = info.offset.x;
+                    const velocityX = info.velocity.x || 0;
+                    const swipeValue = offsetX + velocityX * 50; // combine distance + flick velocity
+                    const n = testimonials.length || 1;
+                    if (swipeValue > dragThreshold || velocityX > 800) {
+                      // Right swipe -> go to previous. Set direction to -1 (enter from left) before changing index.
+                      requestAnimationFrame(() => {
+                        setDir(-1);
+                        setCurrent((prev) => (prev - 1 + n) % n);
+                      });
+                    } else if (swipeValue < -dragThreshold || velocityX < -800) {
+                      // Left swipe -> go to next. Set direction to 1 (enter from right) before changing index.
+                      requestAnimationFrame(() => {
+                        setDir(1);
+                        setCurrent((prev) => (prev + 1) % n);
+                      });
+                    }
+                    setPaused(false);
+                  }}
+                >
                 {/* Rendering the active testimonial card. Kept exact layout and animations. */}
                 <Card className="h-full p-8 bg-white/90 shadow-xl border-blue-100 flex flex-col items-center text-center rounded-2xl transition-all duration-500 pointer-events-auto">
                   <Avatar className="w-20 h-20 mb-4 border-2 border-blue-400 shadow-lg">
@@ -126,17 +140,22 @@ import { supabase } from '@/lib/supabaseClient';
                   <CardDescription className="text-zinc-600 italic text-lg">"{testimonials[current]?.quote}"</CardDescription>
                 </Card>
               </motion.div>
-              {/* Carousel dots */}
-              <div className="flex justify-center gap-2 mt-6">
-                {testimonials.map((_, idx) => (
-                  <button
-                    key={idx}
-                    className={`w-3 h-3 rounded-full border-2 border-blue-300 transition-all duration-300 ${current === idx ? 'bg-blue-500 scale-125' : 'bg-blue-100'}`}
-                    onClick={() => setCurrent(idx)}
-                    aria-label={`Go to testimonial ${idx + 1}`}
-                  />
-                ))}
-              </div>
+              </AnimatePresence>
+            </div>
+            {/* Carousel dots placed outside the overflow-hidden card area so they don't overlap content */}
+            <div className="max-w-xl mx-auto mt-6 flex justify-center gap-2">
+              {testimonials.map((_, idx) => (
+                <button
+                  key={idx}
+                  className={`w-3 h-3 rounded-full border-2 border-blue-300 transition-all duration-300 ${current === idx ? 'bg-blue-500 scale-125' : 'bg-blue-100'}`}
+                  onClick={() => {
+                    if (idx === current) return;
+                    setDir(idx > current ? 1 : -1);
+                    setCurrent(idx);
+                  }}
+                  aria-label={`Go to testimonial ${idx + 1}`}
+                />
+              ))}
             </div>
           </div>
         </motion.section>

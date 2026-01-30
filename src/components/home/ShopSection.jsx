@@ -443,6 +443,9 @@ const ShopSection = () => {
   return (
     <section id="shop-section" className="bg-white py-4 md:py-12">
       <div className="w-full max-w-none px-0 space-y-4 md:space-y-6">
+        <style>{`\n          /* Shop section: main heading and per-category titles styling */\n          /* Main section heading (added below) uses existing typographic scale for other sections */\n          #shop-section .shop-main-title{\n            font-family: inherit;\n            font-weight: 700;\n            text-align: center;\n            margin-bottom: 1.5rem;\n          }\n\n          /* Per-category title: center with horizontal dividers that scale responsively */\n          #shop-section .shop-section-title{\n            display:flex;\n            align-items:center;\n            justify-content:center;\n            width:100%;\n            text-align:center;\n            gap:0.75rem;\n            padding: 0 0.5rem;\n            color:inherit;\n            margin:0;\n          }\n\n          /* Divider lines on both sides: span full available width and slightly bolder */\n          #shop-section .shop-section-title::before,\n          #shop-section .shop-section-title::after{\n            content: '';\n            flex: 1 1 0px;\n            height: 2px; /* bolder line */\n            background: rgba(15,23,42,0.12); /* slightly stronger contrast */\n            opacity: 0.98;\n            min-width: 0;\n          }\n\n          /* Responsive font sizes */\n          #shop-section .shop-section-title{ font-size: 1rem; }           /* mobile ~16px */\n          @media (min-width: 640px){ /* sm */\n            #shop-section .shop-section-title{ font-size: 1.05rem; }\n          }\n          @media (min-width: 768px){ /* md */\n            #shop-section .shop-section-title{ font-size: 1.125rem; }  /* ~18px */\n          }\n          @media (min-width: 1024px){ /* lg */\n            #shop-section .shop-section-title{ font-size: 1.25rem; }   /* ~20px */\n          }\n          @media (min-width: 1280px){ /* xl */\n            #shop-section .shop-section-title{ font-size: 1.375rem; }   /* ~22px */\n          }\n\n          /* Ensure the category heading occupies full row and is centered even when grid uses a left column */\n          #shop-section .grid > .flex.items-center{ grid-column: 1 / -1; justify-content: center; }\n        `}</style>
+        {/* Main section heading matching typographic scale used elsewhere */}
+        <h2 className="shop-main-title text-3xl md:text-4xl font-bold">Shop By Categories</h2>
         {loading ? (
           <div className="text-center py-12">Loading products...</div>
         ) : !hasAny ? (
@@ -460,7 +463,7 @@ const ShopSection = () => {
                     <div className="grid grid-cols-1 md:grid-cols-[250px_1fr] lg:grid-cols-[250px_1fr] gap-4 md:gap-6 items-start">
                     {/* Heading (left column) */}
                     <div className="flex items-center">
-                      <h3 className="text-xl font-semibold">{title}</h3>
+                      <h3 className="text-xl font-semibold shop-section-title">{title}</h3>
                     </div>
 
                     {/* View all (right column) */}
@@ -494,7 +497,7 @@ const ShopSection = () => {
                     <div className="grid grid-cols-1 md:grid-cols-[250px_1fr] lg:grid-cols-[250px_1fr] gap-4 md:gap-6 items-start">
                     {/* Heading (left column) */}
                     <div className="flex items-center">
-                      <h3 className="text-xl font-semibold">{row.title}</h3>
+                      <h3 className="text-xl font-semibold shop-section-title">{row.title}</h3>
                     </div>
 
                     {/* View all (right column) */}

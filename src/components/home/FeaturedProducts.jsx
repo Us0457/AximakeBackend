@@ -17,25 +17,76 @@ const FeaturedProducts = () => {
   const carouselRef = useRef(null);
   const isDownRef = useRef(false);
   const startXRef = useRef(0);
+  const startYRef = useRef(0);
   const scrollLeftRef = useRef(0);
-
+  const targetScrollRef = useRef(null);
+  const rafRef = useRef(null);
   const onPointerDown = (e) => {
     const el = carouselRef.current;
     if (!el) return;
-    if (e.pointerType === 'touch') return;
-    isDownRef.current = true;
-    el.classList.add('cursor-grabbing');
-    startXRef.current = e.pageX - el.offsetLeft;
+    // Record start positions for both mouse and touch.
+    const rect = el.getBoundingClientRect();
+    startXRef.current = e.clientX - rect.left;
+    startYRef.current = e.clientY - rect.top;
     scrollLeftRef.current = el.scrollLeft;
-    e.target.setPointerCapture?.(e.pointerId);
+    // For mouse (non-touch) begin dragging immediately. For touch, wait until we detect horizontal intent.
+    if (e.pointerType !== 'touch') {
+      isDownRef.current = true;
+      el.classList.add('cursor-grabbing');
+      e.target.setPointerCapture?.(e.pointerId);
+    } else {
+      isDownRef.current = false;
+    }
   };
 
   const onPointerMove = (e) => {
     const el = carouselRef.current;
-    if (!el || !isDownRef.current) return;
-    const x = e.pageX - el.offsetLeft;
+    if (!el) return;
+    // If we haven't engaged dragging for touch yet, try to detect horizontal intent.
+    if (e.pointerType === 'touch' && !isDownRef.current) {
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const dx = x - startXRef.current;
+      const dy = y - startYRef.current;
+      // If gesture is primarily horizontal and passes a small threshold, engage dragging.
+      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) {
+        isDownRef.current = true;
+        el.classList.add('cursor-grabbing');
+        // reset start positions so scrolling begins from current pointer
+        startXRef.current = e.pageX - el.offsetLeft;
+        scrollLeftRef.current = el.scrollLeft;
+        e.target.setPointerCapture?.(e.pointerId);
+        e.preventDefault?.();
+      } else {
+        // allow vertical scrolling to continue
+        return;
+      }
+    }
+
+    if (!isDownRef.current) return;
+    const rect = el.getBoundingClientRect();
+    const x = e.clientX - rect.left;
     const walk = x - startXRef.current;
-    el.scrollLeft = scrollLeftRef.current - walk;
+    // Set target scroll position; animate towards it in RAF for smoothness
+    targetScrollRef.current = Math.max(0, scrollLeftRef.current - walk);
+    if (!rafRef.current) {
+      const animate = () => {
+        const el2 = carouselRef.current;
+        if (!el2) return;
+        const current = el2.scrollLeft;
+        const target = targetScrollRef.current ?? current;
+        const next = current + (target - current) * 0.22;
+        el2.scrollLeft = next;
+        if (Math.abs(next - target) > 0.5) {
+          rafRef.current = requestAnimationFrame(animate);
+        } else {
+          el2.scrollLeft = target;
+          rafRef.current = null;
+        }
+      };
+      rafRef.current = requestAnimationFrame(animate);
+    }
   };
 
   const onPointerUp = (e) => {
@@ -43,8 +94,16 @@ const FeaturedProducts = () => {
     if (!el) return;
     isDownRef.current = false;
     el.classList.remove('cursor-grabbing');
-    e.target.releasePointerCapture?.(e.pointerId);
+    try { e.target.releasePointerCapture?.(e.pointerId); } catch (err) { /* ignore */ }
+    // let RAF finish to settle
+    targetScrollRef.current = null;
   };
+
+  React.useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     async function fetchFeatured() {
@@ -110,6 +169,7 @@ const FeaturedProducts = () => {
             </div>
 
             {/* Horizontal carousel below banner */}
+            <style>{`#featured-products-section .no-scrollbar{ -webkit-overflow-scrolling:touch; touch-action:pan-x; scrollbar-width:none; -ms-overflow-style:none; } #featured-products-section .no-scrollbar::-webkit-scrollbar{ display:none; width:0; height:0; }`}</style>
             <div
               ref={carouselRef}
               onPointerDown={onPointerDown}
@@ -117,7 +177,7 @@ const FeaturedProducts = () => {
               onPointerUp={onPointerUp}
               onPointerLeave={onPointerUp}
               className="flex gap-4 overflow-x-auto no-scrollbar py-1 px-0"
-              style={{ scrollBehavior: 'smooth' }}
+              style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch', touchAction: 'auto' }}
             >
               {products.map((product) => {
                 const images = getImages(product);

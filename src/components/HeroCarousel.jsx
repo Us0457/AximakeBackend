@@ -199,7 +199,7 @@ const HeroCarousel = ({ slides = DEFAULT_SLIDES, interval = 5000 }) => {
                   style={{ zIndex: isCurrent ? 20 : 10 }}
                 >
                   <div className="w-full h-full flex items-center justify-center bg-transparent">
-                    <HeroSection />
+                    <HeroSection edgeToEdge />
                   </div>
                 </div>
               );

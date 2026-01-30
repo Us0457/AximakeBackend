@@ -318,6 +318,17 @@ const OrderDetailsPage = () => {
                                 </div>
                               </div>
                             </div>
+                            {/* Show review button when order is delivered and this is a product */}
+                            {item.product_id && String(displayStatus || '').toLowerCase().includes('deliv') && (
+                              <div className="mt-3 w-full flex justify-center">
+                                <button
+                                  className="px-3 py-2 bg-primary text-white rounded-md text-sm hover:opacity-95"
+                                  onClick={() => navigate(`/review/${order.id}/${item.product_id}`)}
+                                >
+                                  Write a Review
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </Card>
                       );
